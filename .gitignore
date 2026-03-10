@@ -1,0 +1,21 @@
+# BTC Signal Pipeline Cache
+*.csv
+!requirements.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Plots
+*.png
+*.jpg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
