@@ -538,9 +538,9 @@ def train_models(X_train, y_train, X_val, y_val):
     # 2. Random Forest — AUC tuning requires more, shallower trees to smooth probabilities
     print("[Train] Random Forest...")
     rf = RandomForestClassifier(
-        n_estimators=1000, max_depth=3, min_samples_leaf=5,
+        n_estimators=300, max_depth=3, min_samples_leaf=5,
         max_features=0.4, class_weight="balanced_subsample",
-        random_state=42, n_jobs=-1
+        random_state=42
     )
     rf.fit(X_train, y_train)
     models["RandomForest"] = ("raw", rf)
@@ -582,11 +582,11 @@ def train_models(X_train, y_train, X_val, y_val):
 
     # 6. Soft VotingClassifier Ensemble
     print("[Train] Soft Voting Ensemble (RF + GB + XGB)...")
-    rf_v = RandomForestClassifier(n_estimators=1000, max_depth=3, min_samples_leaf=5,
+    rf_v = RandomForestClassifier(n_estimators=300, max_depth=3, min_samples_leaf=5,
                                    max_features=0.4, class_weight="balanced_subsample",
-                                   random_state=42, n_jobs=-1)
-    gb_v = GradientBoostingClassifier(n_estimators=1000, max_depth=2, learning_rate=0.01,
-                                       subsample=0.6, max_features=0.5, random_state=42)
+                                   random_state=42)
+    gb_v = GradientBoostingClassifier(n_estimators=300, max_depth=2, learning_rate=0.01,
+                                       subsample=0.8, max_features=0.5, random_state=42)
     
     estimators = [("rf", rf_v), ("gb", gb_v)]
     if HAS_XGB:
@@ -595,7 +595,7 @@ def train_models(X_train, y_train, X_val, y_val):
                                   random_state=42, n_jobs=-1)
         estimators.append(("xgb", xgb_v))
         
-    voter = VotingClassifier(estimators=estimators, voting="soft", n_jobs=-1)
+    voter = VotingClassifier(estimators=estimators, voting="soft")
     voter.fit(X_train, y_train)
     models["EnsembleVoter"] = ("raw", voter)
 
