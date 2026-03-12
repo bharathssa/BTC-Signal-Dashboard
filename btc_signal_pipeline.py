@@ -1108,7 +1108,7 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, output_dir=".")
     colors = [GREEN if i < 5 else CYAN if i < 10 else ORNG
               for i in range(len(top_n))]
     ax_fi.barh(top_n.index[::-1], top_n.values[::-1], color=colors[::-1], alpha=0.8)
-    ax_fi.set_title("Top 15 Feature Importances (Random Forest)",
+    ax_fi.set_title("Feature Importances (Random Forest)",
                     color=TEXT, fontsize=10)
     ax_fi.set_xlabel("Importance", fontsize=9)
     ax_fi.grid(True, axis="x", alpha=0.3)
@@ -1116,8 +1116,8 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, output_dir=".")
     # Right: Correlation heatmap of key features
     ax_cm = axes[1]
     key_features = ["close", "rsi", "ma_ratio", "macd", "bb_pct",
-                    "roll_std7", "gtrends", "fed_rate", "sp500_ret1",
-                    "ret_lag1", "vol_ratio"]
+                    "roll_std7", "gtrends", "gtrends_momentum", "fed_rate", "sp500_ret1",
+                    "ret_lag1"]
     key_features = [f for f in key_features if f in df.columns]
     corr_data = df[key_features].dropna().corr()
     mask_upper = np.triu(np.ones_like(corr_data, dtype=bool), k=1)
