@@ -77,7 +77,9 @@ if not FRED_API_KEY:
 
 # 3. Fallback for manual local testing (NEVER COMMIT YOUR REAL KEY TO GITHUB!)
 if not FRED_API_KEY:
-    FRED_API_KEY = "2c6e38c54d98909b8da4e477f0fa5455"   # ← Replace/remove before committing
+    # If running locally, please add your key to `.streamlit/secrets.toml`
+    # DO NOT paste it as a string here.
+    pass
 
 START_DATE      = "2020-01-01"
 END_DATE        = "2024-12-31"
