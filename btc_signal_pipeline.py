@@ -84,7 +84,7 @@ if not FRED_API_KEY:
 START_DATE      = "2020-01-01"
 END_DATE        = "2024-12-31"
 SIGNAL_THRESHOLD = 0.00          # 0% threshold: any positive 1-day return = Buy
-PROBA_CUTOFF    = 0.49           # Optimal F1 balance: Precision ≈ 60%, Recall ≈ 62%
+PROBA_CUTOFF    = 0.50           # Optimal F1 balance: Precision ≈ 60%, Recall ≈ 62%
 OUTPUT_DIR      = "."            # where to save plots
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +104,7 @@ CORE_FEATURES = [
     "fear_greed",     # Crypto sentiment (Bitcoin Fear & Greed Index)
     "sp500_ret1",     # S&P 500 daily return (macro risk-on/off)
     "adx",            # ADX trend strength (non-directional, complements trend_score)
+    "gtrends_momentum", # Search interest momentum (3d SMA / 7d SMA)
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -438,6 +439,14 @@ def integrate_macro_trends(btc: pd.DataFrame,
     else:
         df["macro_pressure"] = 0.0
 
+    # ── Google Trends Momentum (Lead-Lag optimization) ────────────────────────
+    # Captures the "fishy" 2-3 day delayed reaction in search volume.
+    if "gtrends" in df.columns:
+        df["gtrends_sma3"] = df["gtrends"].rolling(3).mean()
+        df["gtrends_sma7"] = df["gtrends"].rolling(7).mean()
+        df["gtrends_momentum"] = df["gtrends_sma3"] / df["gtrends_sma7"].replace(0, np.nan)
+        df["gtrends_momentum"] = df["gtrends_momentum"].fillna(1.0).clip(0, 3)
+
     print(f"[Features] Macro + Trends integrated: {len(df)} rows, {df.shape[1]} columns")
     return df
 
@@ -735,7 +744,7 @@ def evaluate_models(models, scaler,
 def run_backtest(model, scaler, inp_type,
                  X_test: pd.DataFrame,
                  test_df: pd.DataFrame,
-                 proba_cutoff: float = 0.55,
+                 proba_cutoff: float = 0.50,
                  fee_rate: float = 0.001,
                  name: str = "Strategy") -> pd.DataFrame:
     """
