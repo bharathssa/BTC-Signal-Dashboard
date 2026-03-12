@@ -873,7 +873,7 @@ def predict_next_day(model, scaler, inp_type,
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 12 — Plotting
 # ─────────────────────────────────────────────────────────────────────────────
-def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, output_dir="."):
+def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models, output_dir="."):
     """Generate all visualisation plots and save to files."""
 
     BG      = "#0d1117"
@@ -986,8 +986,25 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, output_dir=".")
     for i, (ax, col, label, thresh) in enumerate(
             zip(axes.flat, metric_cols, metric_labels, threshold_lines)):
         ax.set_facecolor(BG)
-        ax.bar(x - w/2, val_df_[col].values,  w, label="Validation", color=CYAN,  alpha=0.75)
-        ax.bar(x + w/2, test_df_[col].values, w, label="Test",       color=ORNG, alpha=0.75)
+        bars_val = ax.bar(x - w/2, val_df_[col].values,  w, label="Validation", color=CYAN,  alpha=0.75)
+        bars_test = ax.bar(x + w/2, test_df_[col].values, w, label="Test",       color=ORNG, alpha=0.75)
+        
+        # Add data labels
+        for bar in bars_val:
+            height = bar.get_height()
+            ax.annotate(f"{height:.2f}",
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom', fontsize=5, color=TEXT)
+        for bar in bars_test:
+            height = bar.get_height()
+            ax.annotate(f"{height:.2f}",
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom', fontsize=5, color=TEXT)
+
         if thresh:
             ax.axhline(thresh, color=GREEN, lw=1.2, ls="--",
                        label=f"Target ({thresh})")
@@ -1101,15 +1118,36 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, output_dir=".")
     fig, axes = plt.subplots(1, 2, figsize=(16, 8), facecolor=BG)
     fig.suptitle("Feature Analysis", color=TEXT, fontsize=13, fontweight="bold")
 
-    # Left: Feature importance (RF)
+    # Left: Feature importance (Best Model by ROC-AUC)
     ax_fi = axes[0]
     ax_fi.set_facecolor(BG)
-    top_n  = imp_df.head(15)
-    colors = [GREEN if i < 5 else CYAN if i < 10 else ORNG
-              for i in range(len(top_n))]
-    ax_fi.barh(top_n.index[::-1], top_n.values[::-1], color=colors[::-1], alpha=0.8)
-    ax_fi.set_title("Feature Importances (Random Forest)",
-                    color=TEXT, fontsize=10)
+    
+    # 1. Select the Best Model based on Highest ROC-AUC in the Test set
+    test_metrics = metrics_df[metrics_df["Split"] == "Test"].copy()
+    
+    # Filter out models that don't have feature importances (e.g., LogisticRegression, NeuralNetwork)
+    # We check if the model object in the 'models' dictionary has 'feature_importances_'
+    tree_models = [name for name, (m_type, m_obj) in models.items() 
+                   if hasattr(m_obj, "feature_importances_")]
+    
+    if tree_models:
+        best_tree_name = test_metrics[test_metrics["Model"].isin(tree_models)].sort_values("ROC_AUC", ascending=False).iloc[0]["Model"]
+        best_tree_obj = models[best_tree_name][1]
+        
+        imp_series = pd.Series(best_tree_obj.feature_importances_, index=features)
+        imp_df_best = imp_series.sort_values(ascending=False)
+        
+        top_n  = imp_df_best.head(15)
+        colors = [GREEN if i < 5 else CYAN if i < 10 else ORNG
+                  for i in range(len(top_n))]
+        ax_fi.barh(top_n.index[::-1], top_n.values[::-1], color=colors[::-1], alpha=0.8)
+        ax_fi.set_title(f"Feature Importances ({best_tree_name} - Best by ROC-AUC)",
+                        color=TEXT, fontsize=10)
+    else:
+        # Fallback if no tree models are present
+        ax_fi.text(0.5, 0.5, "No Tree Models Available for Feature Importance", ha='center', va='center', color=TEXT)
+        ax_fi.set_title("Feature Importances", color=TEXT, fontsize=10)
+        
     ax_fi.set_xlabel("Importance", fontsize=9)
     ax_fi.grid(True, axis="x", alpha=0.3)
 
@@ -1233,8 +1271,8 @@ def main():
 
     # ── STEP 9: Plot Everything ───────────────────────────────────────────────
     print("\n── STEP 9: Generate Plots ───────────────────────────────────────────")
-    plot_all(df, metrics_df, backtests, bt_rf, imp_df,
-             features_sel, output_dir=OUTPUT_DIR)
+    plot_all(df, metrics_df, backtests, bt_rf, imp_df, features_sel, models,
+             output_dir=OUTPUT_DIR)
 
     # ── FINAL SUMMARY ────────────────────────────────────────────────────────
     print("\n" + "="*70)
