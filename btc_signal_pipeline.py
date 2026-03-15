@@ -89,8 +89,8 @@ if not FRED_API_KEY:
 START_DATE      = "2020-01-01"
 END_DATE        = "2025-12-31"  # Full year 2025 data (test period)
 SIGNAL_THRESHOLD = 0.00          # 0% threshold: any positive 1-day return = Buy
-PROBA_CUTOFF    = 0.50           # BTC signal probability cutoff
-ETH_PROBA_CUTOFF = 0.57          # ETH cutoff is HIGHER — filter out weak ETH signals
+PROBA_CUTOFF    = 0.55           # BTC signal probability cutoff (0.55 = conservative, fewer but higher-quality trades)
+ETH_PROBA_CUTOFF = 0.63          # ETH cutoff is HIGHER — filter out weak ETH signals  
                                   # (ETH is more volatile, so we require more confidence)
 OUTPUT_DIR      = "."            # where to save plots
 

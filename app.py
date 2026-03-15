@@ -60,15 +60,15 @@ with st.sidebar:
     st.markdown("<div class='sidebar-header'>🎯 Signal Probability Cutoffs</div>", unsafe_allow_html=True)
     btc_cutoff = st.slider(
         "BTC Buy Threshold",
-        min_value=0.40, max_value=0.75, value=0.50, step=0.01,
+        min_value=0.40, max_value=0.75, value=0.55, step=0.01,
         format="%.2f",
-        help="Minimum probability for a BTC buy signal. Higher = fewer but more selective trades.",
+        help="Minimum probability for a BTC buy signal. Higher = fewer but more selective trades. Default 0.55 is more conservative than the training cutoff.",
     )
     eth_cutoff = st.slider(
         "ETH Buy Threshold",
-        min_value=0.40, max_value=0.75, value=0.57, step=0.01,
+        min_value=0.40, max_value=0.75, value=0.63, step=0.01,
         format="%.2f",
-        help="Minimum probability for an ETH buy signal. Default is higher than BTC to filter noisy ETH signals.",
+        help="Minimum probability for an ETH buy signal. Default 0.63 is conservative — ETH is more volatile so we require high confidence.",
     )
 
     st.divider()
@@ -124,14 +124,19 @@ with st.sidebar:
                                help="Compute performance for each calendar year from 2020 to end date.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN PIPELINE BUTTON
+# PIPELINE BUTTON — cache the heavy ML training; backtest reruns via sidebar
 # ══════════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False, ttl=3600)
+def _run_cached_pipeline():
+    """Cache trained models + raw data for 1 hour. Backtest reruns separately."""
+    return btc.main()
+
 if st.button("🚀 Run Full Pipeline", type="primary"):
-    with st.spinner("Executing ETL → Feature Engineering → BTC + ETH Training → 4-State Portfolio Backtest…"):
+    with st.spinner("Executing ETL → Feature Engineering → BTC + ETH Training → 4-State Portfolio Backtest… (data cached after first run)"):
         try:
             (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
              metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
-             prediction_btc, prediction_eth, lr_coef_df, lr_formula) = btc.main()
+             prediction_btc, prediction_eth, lr_coef_df, lr_formula) = _run_cached_pipeline()
 
             # ── Store trained artefacts in session_state so sidebar can reuse them ──
             st.session_state["pipeline_done"]   = True
@@ -299,7 +304,7 @@ if st.session_state.get("pipeline_done"):
             f"Uses the same trained models, signal cutoffs ({btc_cutoff:.2f}/{eth_cutoff:.2f}), and allocation weights as above."
         )
 
-        first_year = max(2020, bt_start.year)
+        first_year = max(2020, bt_end.year - 2)   # last 3 calendar years from end date
         last_year  = bt_end.year
         year_rows  = []
         compound_value = CAPITAL   # tracks compounded portfolio value year by year
