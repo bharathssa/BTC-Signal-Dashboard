@@ -88,10 +88,11 @@ if not FRED_API_KEY:
 
 START_DATE      = "2020-01-01"
 END_DATE        = "2025-12-31"  # Full year 2025 data (test period)
-SIGNAL_THRESHOLD = 0.00          # 0% threshold: any positive 1-day return = Buy
-PROBA_CUTOFF    = 0.55           # BTC signal probability cutoff (0.55 = conservative, fewer but higher-quality trades)
-ETH_PROBA_CUTOFF = 0.63          # ETH cutoff is HIGHER — filter out weak ETH signals  
-                                  # (ETH is more volatile, so we require more confidence)
+SIGNAL_THRESHOLD = 0.005         # 0.5% threshold: predict days with meaningful positive returns
+                                  # Changed from 0%: at 0% the model caught noisy +0.1% days,
+                                  # accumulated fees, and ended up negative. 0.5% = real buy signals.
+PROBA_CUTOFF    = 0.55           # BTC signal probability cutoff
+ETH_PROBA_CUTOFF = 0.63          # ETH cutoff is HIGHER — filter out weak ETH signals
 OUTPUT_DIR      = "."            # where to save plots
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,16 +102,15 @@ OUTPUT_DIR      = "."            # where to save plots
 # ─────────────────────────────────────────────────────────────────────────────
 CORE_FEATURES = [
     "trend_score",      # EMA crossover + MACD histogram (asset-specific trend composite)
-    "macro_pressure",   # Fed Rate + Bond Yield change (SHARED - same for both)
-    "rsi",              # RSI-14 overbought/oversold (asset-specific momentum oscillator)
-    "fear_greed",       # Crypto Fear & Greed Index (SHARED)
-    "sp500_ret1",       # S&P 500 return (SHARED - macro risk-on/off)
-    "adx",              # ADX trend strength (asset-specific)
-    "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific)
-    "ma_ratio",         # Short/Long term trend regime (MA20 / MA200)
+    "rsi",              # RSI-14 overbought/oversold (asset-specific momentum oscillator) — #1 by importance
+    "ma_ratio",         # Short/Long term trend regime (MA20 / MA200) — #3 by importance
+    "fear_greed",       # Crypto Fear & Greed Index (SHARED) — #4 sentiment signal
     "vol_ratio",        # Volume vs 5-day avg — confirms trend conviction (volume surge = real move)
-    # bb_pct removed: ~0.65-0.75 correlation with RSI; RSI preferred for interpretability.
-    # L1 Logistic Regression would have zeroed it out. ma_ratio + trend_score cover regime info.
+    "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific, lagged 1 day)
+    "adx",              # ADX trend strength (asset-specific)
+    "ret_lag3",         # 3-day trailing return — medium-term momentum signal (replaces sp500_ret1)
+    "roll_win10",       # 10-day win rate: % of last 10 days that closed up (trend consistency filter)
+    #                     replaces macro_pressure (Fed/yield change) — lowest importance feature
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
