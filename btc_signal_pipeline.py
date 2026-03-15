@@ -971,6 +971,134 @@ def run_portfolio_backtest(models_btc, scaler_btc, features_btc,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SECTION 10.6 — Custom Parameterized Portfolio Backtest (for sidebar controls)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_portfolio_backtest_custom(
+    models_btc, scaler_btc, features_btc,
+    models_eth, scaler_eth, features_eth,
+    df_btc_full: pd.DataFrame,
+    df_eth_full: pd.DataFrame,
+    start_date: str = "2025-01-01",
+    end_date:   str = "2025-12-31",
+    # Allocation per state (weights must sum to 1.0 per state)
+    alloc_full_btc: float = 0.70,   # (BTC=1, ETH=1) state
+    alloc_full_eth: float = 0.30,
+    alloc_btc_only: float = 1.00,   # (BTC=1, ETH=0) state — 100% BTC
+    alloc_eth_eth:  float = 0.60,   # (BTC=0, ETH=1) state
+    # Signal cutoffs
+    btc_cutoff: float = 0.50,
+    eth_cutoff: float = 0.57,
+    # Cost params
+    fee_rate:   float = 0.001,
+    kill_pct:   float = 0.05,
+) -> pd.DataFrame:
+    """
+    Fully parameterised version of run_portfolio_backtest().
+    Slices df_btc_full/df_eth_full to [start_date, end_date),
+    applies user-chosen allocations and cutoffs, runs 4-state backtest.
+    Returns portfolio DataFrame with .attrs performance metrics.
+    Called by the Streamlit sidebar — no model re-training required.
+    """
+    # ── Helper: pick best model and generate signal ───────────────────────────
+    def _get_best_signal(models, scaler, X, cutoff):
+        for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest"]:
+            if preferred in models:
+                inp_type, model = models[preferred]
+                Xp = scaler.transform(X) if inp_type == "scaled" else X
+                proba = model.predict_proba(Xp)[:, 1]
+                return proba, (proba >= cutoff).astype(int)
+        inp_type, model = list(models.items())[0][1]
+        Xp = scaler.transform(X) if inp_type == "scaled" else X
+        proba = model.predict_proba(Xp)[:, 1]
+        return proba, (proba >= cutoff).astype(int)
+
+    # ── Slice to user date window ─────────────────────────────────────────────
+    btc_slice = df_btc_full[(df_btc_full.index >= start_date) &
+                             (df_btc_full.index <= end_date)].dropna()
+    eth_slice = df_eth_full[(df_eth_full.index >= start_date) &
+                             (df_eth_full.index <= end_date)].dropna()
+
+    if len(btc_slice) < 5 or len(eth_slice) < 5:
+        # Too little data — return empty placeholder
+        empty = pd.DataFrame()
+        empty.attrs.update({"strat_return": 0, "btc_bnh": 0, "eth_bnh": 0,
+                            "sharpe": 0, "max_dd": 0})
+        return empty
+
+    common_idx = btc_slice.index.intersection(eth_slice.index)
+    btc_a = btc_slice.loc[common_idx]
+    eth_a = eth_slice.loc[common_idx]
+
+    X_btc = btc_a[features_btc]
+    X_eth = eth_a[features_eth]
+
+    proba_btc, signal_btc = _get_best_signal(models_btc, scaler_btc, X_btc, btc_cutoff)
+    proba_eth, signal_eth = _get_best_signal(models_eth, scaler_eth, X_eth, eth_cutoff)
+
+    # ── Build custom allocation states ────────────────────────────────────────
+    alloc_full_usdt = max(0.0, 1.0 - alloc_full_btc - alloc_full_eth)
+    alloc_btc_eth   = 0.0
+    alloc_btc_usdt  = max(0.0, 1.0 - alloc_btc_only)
+    alloc_eth_usdt  = max(0.0, 1.0 - alloc_eth_eth)
+
+    custom_states = {
+        (1, 1): {"btc": alloc_full_btc,  "eth": alloc_full_eth,
+                 "usdt": alloc_full_usdt, "label": f"Full Risk-On (BTC {alloc_full_btc:.0%}+ETH {alloc_full_eth:.0%})"},
+        (1, 0): {"btc": alloc_btc_only,  "eth": alloc_btc_eth,
+                 "usdt": alloc_btc_usdt,  "label": f"BTC Only ({alloc_btc_only:.0%})"},
+        (0, 1): {"btc": 0.0,             "eth": alloc_eth_eth,
+                 "usdt": alloc_eth_usdt,  "label": f"ETH Partial ({alloc_eth_eth:.0%} ETH)"},
+        (0, 0): {"btc": 0.0,             "eth": 0.0,
+                 "usdt": 1.0,             "label": "Defensive (100% USDT)"},
+    }
+
+    # ── Build portfolio DataFrame ─────────────────────────────────────────────
+    port = pd.DataFrame(index=common_idx)
+    port["signal_btc"]  = signal_btc
+    port["signal_eth"]  = signal_eth
+    port["proba_btc"]   = proba_btc
+    port["proba_eth"]   = proba_eth
+    port["ret_btc"]     = btc_a["close"].pct_change().shift(-1).values
+    port["ret_eth"]     = eth_a["close"].pct_change().shift(-1).values
+
+    port["state_key"]   = list(zip(signal_btc, signal_eth))
+    port["w_btc"]       = port["state_key"].map(lambda k: custom_states[k]["btc"])
+    port["w_eth"]       = port["state_key"].map(lambda k: custom_states[k]["eth"])
+    port["state_label"] = port["state_key"].map(lambda k: custom_states[k]["label"])
+
+    port["gross_ret"]   = (port["w_btc"].shift(1) * port["ret_btc"] +
+                           port["w_eth"].shift(1) * port["ret_eth"])
+    port["trade_btc"]   = port["w_btc"].diff().abs().fillna(0)
+    port["trade_eth"]   = port["w_eth"].diff().abs().fillna(0)
+    port["net_ret"]     = port["gross_ret"] - (port["trade_btc"] + port["trade_eth"]) * fee_rate
+
+    # Kill switch
+    port["kill"]        = (port["net_ret"].shift(1) < -kill_pct).astype(int)
+    port.loc[port["kill"] == 1, "net_ret"] = 0.0
+
+    port["cum_portfolio"] = (1 + port["net_ret"].fillna(0)).cumprod()
+    port["cum_btc_bnh"]   = (1 + port["ret_btc"].fillna(0)).cumprod()
+    port["cum_eth_bnh"]   = (1 + port["ret_eth"].fillna(0)).cumprod()
+
+    # ── Metrics ───────────────────────────────────────────────────────────────
+    total_ret  = port["cum_portfolio"].iloc[-1] - 1
+    btc_bnh    = port["cum_btc_bnh"].iloc[-1] - 1
+    eth_bnh    = port["cum_eth_bnh"].iloc[-1] - 1
+    daily_std  = port["net_ret"].std()
+    sharpe     = (port["net_ret"].mean() / daily_std * np.sqrt(252)) if daily_std > 0 else 0
+    roll_max   = port["cum_portfolio"].cummax()
+    max_dd     = ((port["cum_portfolio"] - roll_max) / roll_max).min()
+
+    port.attrs["strat_return"] = total_ret
+    port.attrs["btc_bnh"]      = btc_bnh
+    port.attrs["eth_bnh"]      = eth_bnh
+    port.attrs["sharpe"]       = sharpe
+    port.attrs["max_dd"]       = max_dd
+    port.attrs["custom_states"]= custom_states
+    return port
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SECTION 11 — Next-Day Prediction
 # ─────────────────────────────────────────────────────────────────────────────
 def predict_next_day(model, scaler, inp_type,
