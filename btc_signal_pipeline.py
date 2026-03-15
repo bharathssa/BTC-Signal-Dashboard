@@ -107,6 +107,7 @@ CORE_FEATURES = [
     "sp500_ret1",       # S&P 500 return (SHARED - macro risk-on/off)
     "adx",              # ADX trend strength (asset-specific)
     "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific)
+    "ma_ratio",         # Short/Long term trend regime (MA20 / MA200)
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
@@ -285,7 +286,8 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Moving averages
     df["ma5"]      = close.rolling(5).mean()
     df["ma20"]     = close.rolling(20).mean()
-    df["ma_ratio"] = df["ma5"] / df["ma20"]   # >1.0 = MA-5 above MA-20 (bullish cross)
+    df["ma200"]    = close.rolling(200).mean()
+    df["ma_ratio"] = df["ma20"] / df["ma200"] # >1.0 = MA-20 above MA-200 (bullish long-term trend)
 
     # EMA
     df["ema12"]    = close.ewm(span=12, adjust=False).mean()

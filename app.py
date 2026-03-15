@@ -135,7 +135,7 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             # SECTION 4 — VISUALISATIONS
             # ═══════════════════════════════════════════════════════════════
             st.header("📊 Pipeline & Backtest Charts")
-            st.caption(f"BTC Model | PROBA_CUTOFF: {btc.PROBA_CUTOFF:.0%} | Kill Switch: -5% daily stop")
+            st.caption(f"BTC Cutoff: {btc.PROBA_CUTOFF:.0%} | ETH Cutoff: {btc.ETH_PROBA_CUTOFF:.0%} | Kill Switch: -3% daily stop")
 
             # ── Cumulative Return (most important — show first) ──────────────────
             st.subheader("📈 Cumulative Return: Portfolio vs BTC vs ETH Buy & Hold")
