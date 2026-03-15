@@ -89,7 +89,9 @@ if not FRED_API_KEY:
 START_DATE      = "2020-01-01"
 END_DATE        = "2024-12-31"
 SIGNAL_THRESHOLD = 0.00          # 0% threshold: any positive 1-day return = Buy
-PROBA_CUTOFF    = 0.50           # Optimal F1 balance: Precision ≈ 60%, Recall ≈ 62%
+PROBA_CUTOFF    = 0.50           # BTC signal probability cutoff
+ETH_PROBA_CUTOFF = 0.57          # ETH cutoff is HIGHER — filter out weak ETH signals
+                                  # (ETH is more volatile, so we require more confidence)
 OUTPUT_DIR      = "."            # where to save plots
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -108,15 +110,22 @@ CORE_FEATURES = [
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
-# | BTC Signal | ETH Signal | BTC% | ETH% | USDT% |
-# |     1      |     1      |  60  |  40  |   0   | <- Full Risk-On
-# |     1      |     0      | 100  |   0  |   0   | <- BTC Only
-# |     0      |     1      |   0  | 100  |   0   | <- ETH Only
-# |     0      |     0      |   0  |   0  | 100   | <- Defensive (USDT)
+# ┌────────────┬────────────┬─────────────────────────────────────────────────┐
+# │ BTC Signal │ ETH Signal │ Allocation                                      │
+# ├────────────┼────────────┼─────────────────────────────────────────────────┤
+# │     1      │     1      │ 70% BTC + 30% ETH  ← Full Risk-On (BTC-led)    │
+# │     1      │     0      │ 100% BTC           ← Strong BTC conviction      │
+# │     0      │     1      │ 60% ETH + 40% USDT ← Partial ETH (hedged)      │
+# │     0      │     0      │ 100% USDT          ← Defensive                 │
+# └────────────┴────────────┴─────────────────────────────────────────────────┘
+# Key design decisions:
+#   - Full Risk-On is BTC-led (70/30) because BTC has stronger long-term momentum
+#   - ETH-Only is HEDGED (60/40) because solo ETH signals are less reliable
+#   - ETH cutoff is 0.57 (higher than BTC 0.50) for added ETH signal confidence
 PORTFOLIO_STATES = {
-    (1, 1): {"btc": 0.60, "eth": 0.40, "usdt": 0.00, "label": "✅ Full Risk-On (BTC 60% + ETH 40%)"},
+    (1, 1): {"btc": 0.70, "eth": 0.30, "usdt": 0.00, "label": "✅ Full Risk-On (BTC 70% + ETH 30%)"},
     (1, 0): {"btc": 1.00, "eth": 0.00, "usdt": 0.00, "label": "⚡ BTC Only (100%)"},
-    (0, 1): {"btc": 0.00, "eth": 1.00, "usdt": 0.00, "label": "⚡ ETH Only (100%)"},
+    (0, 1): {"btc": 0.00, "eth": 0.60, "usdt": 0.40, "label": "🌊 ETH Partial (60% ETH + 40% USDT)"},
     (0, 0): {"btc": 0.00, "eth": 0.00, "usdt": 1.00, "label": "🛡️ Defensive (100% USDT)"},
 }
 
@@ -855,31 +864,26 @@ def run_portfolio_backtest(models_btc, scaler_btc, features_btc,
                            models_eth, scaler_eth, features_eth,
                            test_btc: pd.DataFrame, test_eth: pd.DataFrame,
                            proba_cutoff: float = PROBA_CUTOFF,
+                           eth_proba_cutoff: float = ETH_PROBA_CUTOFF,
                            fee_rate: float = 0.001) -> pd.DataFrame:
     """
-    4-State Portfolio Backtest.
-    On each day, we:
-      1. Get signal_btc from the best BTC model (highest ROC-AUC on test set)
-      2. Get signal_eth from the best ETH model
-      3. Map (signal_btc, signal_eth) to the allocation table (PORTFOLIO_STATES)
-      4. Calculate blended daily return = w_btc*ret_btc + w_eth*ret_eth
-    Returns a DataFrame with daily blended returns and cumulative portfolio curve.
+    4-State Portfolio Backtest with separate probability cutoffs per asset.
+    BTC uses PROBA_CUTOFF (0.50); ETH uses ETH_PROBA_CUTOFF (0.57).
+    Higher ETH threshold filters weak ETH signals → fewer but better ETH days.
     """
     # Pick best tree-based model for each asset (by ROC-AUC)
-    def _get_best_signal(models, scaler, X_test):
-        """Return probability and binary signal from the Gradient Boosting model (best default)."""
-        # Prefer GradientBoosting → RandomForest → first available
+    def _get_best_signal(models, scaler, X_test, cutoff):
+        """Return probability and binary signal using the given cutoff."""
         for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest"]:
             if preferred in models:
                 inp_type, model = models[preferred]
                 X = scaler.transform(X_test) if inp_type == "scaled" else X_test
                 proba = model.predict_proba(X)[:, 1]
-                return proba, (proba >= proba_cutoff).astype(int)
-        # Fallback
+                return proba, (proba >= cutoff).astype(int)
         inp_type, model = list(models.items())[0][1]
         X = scaler.transform(X_test) if inp_type == "scaled" else X_test
         proba = model.predict_proba(X)[:, 1]
-        return proba, (proba >= proba_cutoff).astype(int)
+        return proba, (proba >= cutoff).astype(int)
 
     # Align ETH and BTC to same trading dates (intersection)
     common_idx = test_btc.index.intersection(test_eth.index)
@@ -889,8 +893,12 @@ def run_portfolio_backtest(models_btc, scaler_btc, features_btc,
     X_btc = test_btc_a[features_btc]
     X_eth = test_eth_a[features_eth]
 
-    proba_btc, signal_btc = _get_best_signal(models_btc, scaler_btc, X_btc)
-    proba_eth, signal_eth = _get_best_signal(models_eth, scaler_eth, X_eth)
+    proba_btc, signal_btc = _get_best_signal(models_btc, scaler_btc, X_btc, proba_cutoff)
+    proba_eth, signal_eth = _get_best_signal(models_eth, scaler_eth, X_eth, eth_proba_cutoff)
+
+    print(f"[Portfolio] BTC cutoff={proba_cutoff:.2f}  ETH cutoff={eth_proba_cutoff:.2f}")
+    print(f"[Portfolio] BTC buy days={signal_btc.sum()} / {len(signal_btc)}  "
+          f"ETH buy days={signal_eth.sum()} / {len(signal_eth)}")
 
     # Build portfolio DataFrame
     port = pd.DataFrame(index=common_idx)
@@ -1515,7 +1523,8 @@ def main():
         models_btc, scaler_btc, features_btc,
         models_eth, scaler_eth, features_eth,
         test_df_btc, test_df_eth,
-        proba_cutoff=PROBA_CUTOFF
+        proba_cutoff=PROBA_CUTOFF,
+        eth_proba_cutoff=ETH_PROBA_CUTOFF
     )
 
     # ── STEP 8: Next-Day Predictions (both assets) ────────────────────────────
