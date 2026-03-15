@@ -50,10 +50,10 @@ with st.sidebar:
     )
     bt_end = st.date_input(
         "End Date",
-        value=date(2026, 2, 28),
+        value=date(2025, 12, 31),
         min_value=date(2020, 1, 2),
         max_value=date(2026, 2, 28),
-        help="Backtest evaluation end date.",
+        help="Backtest evaluation end date. Default is full year 2025.",
     )
 
     st.divider()
@@ -141,12 +141,12 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             st.session_state["models_eth"]      = models_eth
             st.session_state["scaler_btc"]      = scaler_btc
             st.session_state["scaler_eth"]      = scaler_eth
-            st.session_state["features_btc"]    = list(df_btc.columns.difference(
-                {"open","high","low","close","volume","target","forward_ret","bb_upper","bb_lower"}
-            ))
-            st.session_state["features_eth"]    = list(df_eth.columns.difference(
-                {"open","high","low","close","volume","target","forward_ret","bb_upper","bb_lower"}
-            ))
+            # Use CORE_FEATURES — the exact 7 features the models were trained on.
+            # Do NOT recompute from column difference; that produces extra columns
+            # that the fitted model has never seen (causes sklearn feature-name error).
+            core_feats = [f for f in btc.CORE_FEATURES if f in df_btc.columns]
+            st.session_state["features_btc"]    = core_feats
+            st.session_state["features_eth"]    = [f for f in btc.CORE_FEATURES if f in df_eth.columns]
             st.session_state["metrics_btc"]     = metrics_btc
             st.session_state["metrics_eth"]     = metrics_eth
             st.session_state["backtests_btc"]   = backtests_btc
