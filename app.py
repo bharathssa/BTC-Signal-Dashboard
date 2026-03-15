@@ -70,9 +70,13 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             # SECTION 2 — PORTFOLIO KPI CARDS
             # ═══════════════════════════════════════════════════════════════
             st.header("💰 $50M Portfolio — 4-State Backtest Results (2025)")
-            st.caption(f"Blended daily returns from BTC + ETH based on model signals. 0.1% fee per trade. 5% kill-switch active. "
-                       f"| **BTC Model:** {prediction_btc.get('model_name', 'Unknown')} "
-                       f"| **ETH Model:** {prediction_eth.get('model_name', 'Unknown')}")
+            st.caption(f"Blended daily returns from BTC + ETH based on model signals. 0.1% fee per trade. 5% kill-switch active.")
+            
+            st.markdown("### 🏆 Top Performing Models (Selected by ROC-AUC)")
+            m1, m2 = st.columns(2)
+            m1.metric("🧠 Best BTC Model", prediction_btc.get('model_name', 'Unknown'))
+            m2.metric("🧠 Best ETH Model", prediction_eth.get('model_name', 'Unknown'))
+            st.markdown("<br>", unsafe_allow_html=True)
 
             strat_ret = portfolio_bt.attrs["strat_return"]
             btc_bnh   = portfolio_bt.attrs["btc_bnh"]
