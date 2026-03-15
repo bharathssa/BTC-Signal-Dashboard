@@ -671,24 +671,8 @@ def train_models(X_train, y_train, X_val, y_val):
 
     # Removed duplicate XGBoost and LightGBM training blocks that were slowing down the script.
 
-    # 6. MLP Neural Network (Multi-Layer Perceptron via sklearn)
-    # Works without TensorFlow. 3-layer deep network trained on scaled features.
-    print("[Train] MLP Neural Network (sklearn)...")
-    mlp = MLPClassifier(
-        hidden_layer_sizes=(256, 128, 64),   # 3 hidden layers: wide → narrow → output
-        activation="relu",                    # ReLU prevents vanishing gradient
-        solver="adam",                        # Adam optimizer (best for NN)
-        alpha=0.01,                           # L2 regularization strength
-        batch_size=64,
-        learning_rate_init=0.001,
-        max_iter=300,
-        early_stopping=True,
-        validation_fraction=0.15,
-        n_iter_no_change=20,
-        random_state=42,
-    )
-    mlp.fit(X_tr_sc, y_train)
-    models["NeuralNetwork"] = ("scaled", mlp)
+    # NeuralNetwork removed as requested
+
     
     print(f"[Train] {len(models)} models trained.")
     return models, scaler
@@ -721,7 +705,8 @@ def evaluate_models(models, scaler,
                     X_train, y_train,
                     X_val,   y_val,
                     X_test,  y_test,
-                    feature_names):
+                    feature_names,
+                    proba_cutoff=PROBA_CUTOFF):
     """
     Compute precision, recall, F1, accuracy, ROC-AUC for all models
     on validation AND test sets. Return summary DataFrame + plot results.
@@ -740,7 +725,7 @@ def evaluate_models(models, scaler,
                                             ("Test",       X_t, y_test)]:
             if hasattr(model, "predict_proba"):
                 y_prob = model.predict_proba(X_eval)[:, 1]
-                y_pred = (y_prob >= PROBA_CUTOFF).astype(int)
+                y_pred = (y_prob >= proba_cutoff).astype(int)
             else:
                 y_pred = model.predict(X_eval)
                 y_prob = y_pred.astype(float)
@@ -759,7 +744,7 @@ def evaluate_models(models, scaler,
         # Detailed classification report on test
         X_t2 = X_test_sc if inp_type == "scaled" else X_test
         if hasattr(model, "predict_proba"):
-            y_pred_test = (model.predict_proba(X_t2)[:, 1] >= PROBA_CUTOFF).astype(int)
+            y_pred_test = (model.predict_proba(X_t2)[:, 1] >= proba_cutoff).astype(int)
         else:
             y_pred_test = model.predict(X_t2)
         print(f"\n{'='*60}")
@@ -1104,7 +1089,8 @@ def run_portfolio_backtest_custom(
 def predict_next_day(model, scaler, inp_type,
                      df: pd.DataFrame,
                      features: list,
-                     threshold: float = 0.02) -> dict:
+                     threshold: float = 0.02,
+                     proba_cutoff: float = PROBA_CUTOFF) -> dict:
     """
     Predict tomorrow's signal using the most recent complete row.
     Compares today's Close vs threshold to set context.
@@ -1116,7 +1102,7 @@ def predict_next_day(model, scaler, inp_type,
     X_latest     = scaler.transform(latest_row) if inp_type == "scaled" else latest_row.values
     proba        = model.predict_proba(X_latest)[0, 1] if hasattr(model, "predict_proba") \
                    else float(model.predict(X_latest)[0])
-    signal       = int(proba >= PROBA_CUTOFF)
+    signal       = int(proba >= proba_cutoff)
 
     # Previous day return for context
     prev_close   = df["close"].iloc[-2]
@@ -1130,7 +1116,7 @@ def predict_next_day(model, scaler, inp_type,
     print(f"  Today's Return:    {today_ret:>+.2%}")
     print(f"  Model:             {model.__class__.__name__}")
     print(f"  P(next >+{threshold*100:.0f}%):   {proba:.4f}")
-    print(f"  Signal Threshold:  {PROBA_CUTOFF}")
+    print(f"  Signal Threshold:  {proba_cutoff}")
     print(f"  ──────────────────────────────")
     print(f"  TOMORROW SIGNAL:   {'🟢 BUY' if signal == 1 else '⚪ HOLD CASH'}")
     if signal == 1:
@@ -1154,7 +1140,7 @@ def predict_next_day(model, scaler, inp_type,
 # SECTION 12 — Plotting
 # ─────────────────────────────────────────────────────────────────────────────
 def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
-             df_eth=None, portfolio_bt=None, output_dir="."):
+             df_eth=None, portfolio_bt=None, output_dir=".", proba_cutoff=PROBA_CUTOFF):
     """Generate all visualisation plots and save to files."""
 
     BG      = "#0d1117"
@@ -1312,7 +1298,7 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
 
     cmap = sns.light_palette("#2E75B6", as_cmap=True)
     for ax, (name, bt) in zip(axes, backtests.items()):
-        preds = (bt["proba"] >= PROBA_CUTOFF).astype(int)
+        preds = (bt["proba"] >= proba_cutoff).astype(int)
         actual = (bt["forward_ret"] > SIGNAL_THRESHOLD).astype(int)
         cm = confusion_matrix(actual, preds)
         sns.heatmap(cm, annot=True, fmt="d", cmap=cmap, ax=ax,
@@ -1406,7 +1392,7 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
     # 1. Select the Best Model based on Highest ROC-AUC in the Test set
     test_metrics = metrics_df[metrics_df["Split"] == "Test"].copy()
     
-    # Filter out models that don't have feature importances (e.g., LogisticRegression, NeuralNetwork)
+    # Filter out models that don't have feature importances (e.g., LogisticRegression)
     # We check if the model object in the 'models' dictionary has 'feature_importances_'
     tree_models = [name for name, (m_type, m_obj) in models.items() 
                    if hasattr(m_obj, "feature_importances_")]

@@ -216,6 +216,54 @@ if st.session_state.get("pipeline_done"):
 
     period_label = f"{bt_start.strftime('%d %b %Y')} → {bt_end.strftime('%d %b %Y')}"
 
+    # ── Re-evaluate metrics and plots based on current cutoffs ───────────────
+    with st.spinner("Updating metrics and charts for new cutoffs..."):
+        train_btc, val_btc, test_btc = btc.time_split(df_btc)
+        train_eth, val_eth, test_eth = btc.time_split(df_eth)
+        
+        metrics_btc = btc.evaluate_models(
+            models_btc, scaler_btc,
+            train_btc[features_btc], train_btc["target"],
+            val_btc[features_btc], val_btc["target"],
+            test_btc[features_btc], test_btc["target"],
+            features_btc, proba_cutoff=btc_cutoff
+        )
+        metrics_eth = btc.evaluate_models(
+            models_eth, scaler_eth,
+            train_eth[features_eth], train_eth["target"],
+            val_eth[features_eth], val_eth["target"],
+            test_eth[features_eth], test_eth["target"],
+            features_eth, proba_cutoff=eth_cutoff
+        )
+        
+        # Re-run backtest for BTC to get bt_rf for plots, and update all backtests for CM plots
+        re_backtests_btc = {}
+        for name, (inp_type, model) in models_btc.items():
+            re_backtests_btc[f"BTC-{name}"] = btc.run_backtest(
+                model, scaler_btc, inp_type, test_btc[features_btc], test_btc, proba_cutoff=btc_cutoff, name=f"BTC-{name}"
+            )
+        bt_rf = re_backtests_btc.get("BTC-GradientBoosting", list(re_backtests_btc.values())[0])
+        
+        # We don't overwrite session_state here so it reruns efficiently next interaction
+        
+        btc.plot_all(
+            df_btc, metrics_btc, re_backtests_btc, bt_rf, None, features_btc, models_btc,
+            df_eth=df_eth, portfolio_bt=custom_bt, output_dir=".", proba_cutoff=btc_cutoff
+        )
+
+        # Also update tomorrow's predictions with new cutoffs
+        gb_btc_name = "GradientBoosting" if "GradientBoosting" in models_btc else list(models_btc.keys())[0]
+        gb_eth_name = "GradientBoosting" if "GradientBoosting" in models_eth else list(models_eth.keys())[0]
+
+        prediction_btc = btc.predict_next_day(
+            models_btc[gb_btc_name][1], scaler_btc, models_btc[gb_btc_name][0],
+            df_btc, features_btc, btc.SIGNAL_THRESHOLD, proba_cutoff=btc_cutoff
+        )
+        prediction_eth = btc.predict_next_day(
+            models_eth[gb_eth_name][1], scaler_eth, models_eth[gb_eth_name][0],
+            df_eth, features_eth, btc.SIGNAL_THRESHOLD, proba_cutoff=eth_cutoff
+        )
+
     # ═══════════════════════════════════════════════════════════════
     # SECTION 1 — TOMORROW'S PORTFOLIO DECISION
     # ═══════════════════════════════════════════════════════════════
@@ -310,11 +358,8 @@ if st.session_state.get("pipeline_done"):
         compound_value = CAPITAL   # tracks compounded portfolio value year by year
 
         for yr in range(first_year, last_year + 1):
-            yr_start = str(max(date(yr, 1, 1), bt_start))
+            yr_start = str(date(yr, 1, 1))
             yr_end   = str(min(date(yr, 12, 31), bt_end))
-
-            if yr_start > yr_end:
-                continue
 
             ybt = btc.run_portfolio_backtest_custom(
                 models_btc, scaler_btc, features_btc,
@@ -538,6 +583,6 @@ else:
     col_l1.metric("Capital to Deploy", f"${capital_m}M", "Configurable in sidebar")
     col_l2.metric("Assets",            "BTC + ETH + USDT", "3-asset portfolio")
     col_l3.metric("Portfolio States",  "4",  "Full / BTC / ETH / Defensive")
-    col_l4.metric("Models per Asset",  "5",  "LR + RF + GB + Ensemble + MLP")
+    col_l4.metric("Models per Asset",  "4",  "LR + RF + GB + Ensemble")
     st.info("👆 Set your parameters in the **sidebar**, then click **Run Full Pipeline** to execute the full ETL → Dual-Model Training → 4-State Portfolio Backtest → Tomorrow's Signals workflow.")
     st.info("💡 **Tip:** After the pipeline runs, all sidebar sliders update the backtest **instantly** — no retraining needed!")
