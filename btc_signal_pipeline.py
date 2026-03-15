@@ -1018,6 +1018,7 @@ def predict_next_day(model, scaler, inp_type,
         "proba":       proba,
         "signal":      signal,
         "signal_label": "BUY" if signal == 1 else "HOLD CASH",
+        "model_name":  model.__class__.__name__,
     }
 
 

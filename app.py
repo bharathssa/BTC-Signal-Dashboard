@@ -127,7 +127,10 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             st.header("💲 Current Prices")
             p1, p2 = st.columns(2)
             p1.metric("Bitcoin (BTC)", f"${prediction_btc['close']:,.2f}", f"{prediction_btc['today_ret']:+.2%} today")
+            p1.caption(f"🧠 Selected Model: **{prediction_btc.get('model_name', 'Unknown')}**")
+            
             p2.metric("Ethereum (ETH)", f"${prediction_eth['close']:,.2f}", f"{prediction_eth['today_ret']:+.2%} today")
+            p2.caption(f"🧠 Selected Model: **{prediction_eth.get('model_name', 'Unknown')}**")
 
             st.divider()
 
