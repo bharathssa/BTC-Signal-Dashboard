@@ -436,8 +436,11 @@ def integrate_macro_trends(btc: pd.DataFrame,
     # Macro: reindex to BTC trading days, forward-fill ONLY
     macro_reindexed  = macro.reindex(full_idx).ffill()
 
-    # Trends: already lagged by 1 day in fetch step — just reindex + ffill
+    # Trends: lagged by 1 day in fetch step AND re-applied here as defence-in-depth.
+    # The 1-day lag prevents lookahead: today we only know yesterday's search volume.
     trends_reindexed = trends.reindex(full_idx).ffill()
+    if "gtrends" in trends_reindexed.columns:
+        trends_reindexed["gtrends"] = trends_reindexed["gtrends"].shift(1).ffill()
 
     # FGI: Lagged by 1 day to strictly prevent look-ahead bias
     fgi_reindexed = fgi.shift(1).reindex(full_idx).ffill()

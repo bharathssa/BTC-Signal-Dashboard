@@ -136,9 +136,12 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 # PIPELINE BUTTON — cache the heavy ML training; backtest reruns via sidebar
 # ══════════════════════════════════════════════════════════════════════════════
-@st.cache_data(show_spinner=False, ttl=86400)   # 24 hours — no API calls for a full day
-def _run_cached_pipeline():
-    """Cache trained models + raw data for 1 hour. Backtest reruns separately."""
+_FEATURE_HASH = str(sorted(btc.CORE_FEATURES))   # cache key: changes when feature set changes
+
+@st.cache_data(show_spinner=False, ttl=86400)   # 24 hours; also invalidates when CORE_FEATURES changes
+def _run_cached_pipeline(_feature_hash=_FEATURE_HASH):
+    """Trains models and returns all artefacts. Cache is keyed to the current feature set."""
+
     return btc.main()
 
 if st.button("🚀 Run Full Pipeline", type="primary"):
