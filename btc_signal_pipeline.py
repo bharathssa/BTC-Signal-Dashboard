@@ -102,14 +102,15 @@ OUTPUT_DIR      = "."            # where to save plots
 CORE_FEATURES = [
     "trend_score",      # EMA crossover + MACD histogram (asset-specific trend composite)
     "macro_pressure",   # Fed Rate + Bond Yield change (SHARED - same for both)
-    "rsi",              # RSI-14 overbought/oversold (asset-specific)
+    "rsi",              # RSI-14 overbought/oversold (asset-specific momentum oscillator)
     "fear_greed",       # Crypto Fear & Greed Index (SHARED)
     "sp500_ret1",       # S&P 500 return (SHARED - macro risk-on/off)
     "adx",              # ADX trend strength (asset-specific)
     "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific)
     "ma_ratio",         # Short/Long term trend regime (MA20 / MA200)
-    "bb_pct",           # Bollinger Band % position — price vs upper/lower band (reversal/breakout signal)
     "vol_ratio",        # Volume vs 5-day avg — confirms trend conviction (volume surge = real move)
+    # bb_pct removed: ~0.65-0.75 correlation with RSI; RSI preferred for interpretability.
+    # L1 Logistic Regression would have zeroed it out. ma_ratio + trend_score cover regime info.
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
