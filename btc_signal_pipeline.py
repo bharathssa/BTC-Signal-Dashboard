@@ -1,18 +1,23 @@
 """
 =============================================================================
-AlphaQuest Capital — BTC Macro-Sentiment Signal Pipeline
+AlphaQuest Capital — Multi-Asset Crypto Signal Pipeline
 =============================================================================
-Full pipeline: ETL → Feature Engineering → Multi-Model Training →
-               Evaluation → Backtesting → Next-Day Prediction
+Full pipeline: ETL → Feature Engineering → Dual-Model Training →
+               4-State Portfolio Backtest → Next-Day Prediction
 
-DEPENDENCIES (install before running):
+Assets: Bitcoin (BTC) + Ethereum (ETH) + Tether/USDT (Stablecoin)
+Portfolio States:
+  BTC=BUY  ETH=BUY  → 60% BTC + 40% ETH   (Full Risk-On)
+  BTC=BUY  ETH=HOLD → 100% BTC              (BTC Only)
+  BTC=HOLD ETH=BUY  → 100% ETH              (ETH Only)
+  BTC=HOLD ETH=HOLD → 100% USDT             (Defensive)
+
+DEPENDENCIES:
     pip install pandas numpy scikit-learn xgboost lightgbm
                 fredapi pytrends yfinance matplotlib seaborn
 
 API KEYS REQUIRED (free sign-up):
     FRED API key  → https://fred.stlouisfed.org/docs/api/api_key.html
-    Set: FRED_API_KEY = "your_key_here"
-
 =============================================================================
 """
 
@@ -88,52 +93,70 @@ PROBA_CUTOFF    = 0.50           # Optimal F1 balance: Precision ≈ 60%, Recall
 OUTPUT_DIR      = "."            # where to save plots
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6 Composite Features (combining correlated signals to boost model learning)
+# CORE FEATURES: Same 7-feature set used for BOTH BTC and ETH models.
+# Each asset gets its own trained model, but identical feature structure.
+# The only difference is the underlying price & Google Trends data source.
 # ─────────────────────────────────────────────────────────────────────────────
 CORE_FEATURES = [
-    # COMPOSITE 1: Trend Momentum Score (EMA crossover + MACD histogram combined)
-    # Captures the same information as two separate features, but is stronger
-    "trend_score",    # = normalized_ema_cross + normalized_macd_hist
-
-    # COMPOSITE 2: Macro Pressure (Fed Rate Cut + Bond Yield Change together)
-    # Rising yields AND rate hikes = sell, falling yields AND rate cuts = buy
-    "macro_pressure", # = bounded(fed_rate_cut + bond_yield_cut)
-
-    # STANDALONE: Cannot be combined (each captures unique uncorrelated signal)
-    "rsi",            # RSI-14: overbought/oversold
-    "fear_greed",     # Crypto sentiment (Bitcoin Fear & Greed Index)
-    "sp500_ret1",     # S&P 500 daily return (macro risk-on/off)
-    "adx",            # ADX trend strength (non-directional, complements trend_score)
-    "gtrends_momentum", # Search interest momentum (3d SMA / 7d SMA)
+    "trend_score",      # EMA crossover + MACD histogram (BTC-specific)
+    "macro_pressure",   # Fed Rate + Bond Yield change (SHARED - same for both)
+    "rsi",              # RSI-14 overbought/oversold (asset-specific)
+    "fear_greed",       # Crypto Fear & Greed Index (SHARED)
+    "sp500_ret1",       # S&P 500 return (SHARED - macro risk-on/off)
+    "adx",              # ADX trend strength (asset-specific)
+    "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific)
 ]
 
+# 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
+# | BTC Signal | ETH Signal | BTC% | ETH% | USDT% |
+# |     1      |     1      |  60  |  40  |   0   | <- Full Risk-On
+# |     1      |     0      | 100  |   0  |   0   | <- BTC Only
+# |     0      |     1      |   0  | 100  |   0   | <- ETH Only
+# |     0      |     0      |   0  |   0  | 100   | <- Defensive (USDT)
+PORTFOLIO_STATES = {
+    (1, 1): {"btc": 0.60, "eth": 0.40, "usdt": 0.00, "label": "✅ Full Risk-On (BTC 60% + ETH 40%)"},
+    (1, 0): {"btc": 1.00, "eth": 0.00, "usdt": 0.00, "label": "⚡ BTC Only (100%)"},
+    (0, 1): {"btc": 0.00, "eth": 1.00, "usdt": 0.00, "label": "⚡ ETH Only (100%)"},
+    (0, 0): {"btc": 0.00, "eth": 0.00, "usdt": 1.00, "label": "🛡️ Defensive (100% USDT)"},
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 1 — ETL: Fetch BTC OHLCV
+# SECTION 1 — ETL: Fetch Asset OHLCV (Generic — used for BTC and ETH)
 # ─────────────────────────────────────────────────────────────────────────────
-def fetch_btc_ohlcv(start: str, end: str) -> pd.DataFrame:
+def fetch_asset_ohlcv(ticker_symbol: str, start: str, end: str) -> pd.DataFrame:
     """
-    Fetch daily BTC-USD OHLCV via yfinance.
-    Falls back to realistic synthetic data if yfinance is unavailable.
+    Generic OHLCV fetcher via yfinance. Works for BTC-USD, ETH-USD, or any asset.
+    Caches to disk to avoid repeated API calls.
     """
-    cache_file = f"{OUTPUT_DIR}/btc_cache_{start}_{end}.csv"
+    asset_name = ticker_symbol.replace("-", "").replace("USD", "").lower()
+    cache_file = f"{OUTPUT_DIR}/{asset_name}_cache_{start}_{end}.csv"
     if os.path.exists(cache_file):
-        print(f"[ETL] Loaded BTC OHLCV from cache ({cache_file})")
-        df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-        return df
+        print(f"[ETL] Loaded {ticker_symbol} OHLCV from cache ({cache_file})")
+        return pd.read_csv(cache_file, index_col=0, parse_dates=True)
 
     try:
         import yfinance as yf
-        ticker = yf.Ticker("BTC-USD")
+        ticker = yf.Ticker(ticker_symbol)
         df = ticker.history(start=start, end=end, interval="1d")
         df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
         df.columns = ["open", "high", "low", "close", "volume"]
         df.index = pd.to_datetime(df.index).tz_localize(None)
-        df = df[df["volume"] >= 1_000_000]   # liquidity filter
-        print(f"[ETL] BTC OHLCV fetched via yfinance: {len(df)} rows")
+        df = df[df["volume"] >= 1_000]   # basic liquidity filter
+        print(f"[ETL] {ticker_symbol} OHLCV fetched via yfinance: {len(df)} rows")
         df.to_csv(cache_file)
         return df
     except Exception as e:
-        raise RuntimeError(f"[ETL] ERROR: yfinance failed to fetch BTC data ({e}). Check your internet connection or the yfinance library.")
+        raise RuntimeError(f"[ETL] ERROR: yfinance failed to fetch {ticker_symbol} ({e}).")
+
+
+def fetch_btc_ohlcv(start: str, end: str) -> pd.DataFrame:
+    """Convenience wrapper for BTC-USD fetching."""
+    return fetch_asset_ohlcv("BTC-USD", start, end)
+
+
+def fetch_eth_ohlcv(start: str, end: str) -> pd.DataFrame:
+    """Convenience wrapper for ETH-USD fetching."""
+    return fetch_asset_ohlcv("ETH-USD", start, end)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 2 — ETL: Fetch FRED Macro Data (DFF + SP500/NASDAQ)
@@ -177,63 +200,68 @@ def fetch_fred_data(start: str, end: str, api_key: str) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 3 — ETL: Fetch Google Trends (worldwide "bitcoin" search)
+# SECTION 3 — ETL: Fetch Google Trends (Generic — supports any keyword)
 # ─────────────────────────────────────────────────────────────────────────────
-def fetch_google_trends(start: str, end: str) -> pd.DataFrame:
+def fetch_google_trends_for(keyword: str, start: str, end: str) -> pd.DataFrame:
     """
-    Fetch worldwide Google Trends for keyword 'bitcoin' via pytrends.
-    Returns daily data (pytrends returns weekly for long ranges — interpolated).
-    Falls back to synthetic correlated data.
-    NOTE: pytrends is rate-limited. Add time.sleep(5) between calls if needed.
+    Fetch worldwide Google Trends for a given keyword via pytrends.
+    keyword: e.g. 'bitcoin' or 'ethereum'
+    Returns daily data (interpolated from weekly). Lagged by 1 day.
+    NOTE: pytrends is rate-limited. Sleeps 2s between 6-month chunks.
     """
-    cache_file = f"{OUTPUT_DIR}/gtrends_cache_{start}_{end}.csv"
+    safe_kw    = keyword.replace(" ", "_")
+    cache_file = f"{OUTPUT_DIR}/gtrends_{safe_kw}_cache_{start}_{end}.csv"
     if os.path.exists(cache_file):
-        print(f"[ETL] Loaded Google Trends from cache ({cache_file})")
+        print(f"[ETL] Loaded Google Trends ({keyword}) from cache ({cache_file})")
         return pd.read_csv(cache_file, index_col=0, parse_dates=True)
 
     try:
         from pytrends.request import TrendReq
+        import time
         pytrends = TrendReq(hl="en-US", tz=0, timeout=(10, 25))
 
-        # pytrends returns weekly for >90-day windows; we fetch yearly chunks
         all_chunks = []
-        chunk_start = pd.Timestamp(start)
-        chunk_end   = pd.Timestamp(end)
+        current    = pd.Timestamp(start)
+        chunk_end  = pd.Timestamp(end)
 
-        current = chunk_start
         while current < chunk_end:
             next_chunk = min(current + pd.DateOffset(months=6), chunk_end)
             timeframe  = f"{current.strftime('%Y-%m-%d')} {next_chunk.strftime('%Y-%m-%d')}"
-            pytrends.build_payload(["bitcoin"], cat=0, timeframe=timeframe, geo="", gprop="")
+            pytrends.build_payload([keyword], cat=0, timeframe=timeframe, geo="", gprop="")
             data = pytrends.interest_over_time()
             if not data.empty:
-                all_chunks.append(data[["bitcoin"]])
+                all_chunks.append(data[[keyword]])
             current = next_chunk + pd.DateOffset(days=1)
-            import time; time.sleep(2)   # rate limit buffer
+            time.sleep(2)   # rate limit buffer
 
         if all_chunks:
             trends_raw = pd.concat(all_chunks)
             trends_raw = trends_raw[~trends_raw.index.duplicated(keep="first")]
-            # Normalise to 0-100
-            trends_raw["gtrends"] = trends_raw["bitcoin"].astype(float)
-            # Interpolate to daily
+            trends_raw["gtrends"] = trends_raw[keyword].astype(float)
             full_idx   = pd.date_range(start, end, freq="D")
             trends_day = trends_raw[["gtrends"]].reindex(full_idx).interpolate("linear")
-            # CRITICAL: lag by 1 day — we only see yesterday's trend at close
-            trends_day["gtrends"] = trends_day["gtrends"].shift(1)
+            trends_day["gtrends"] = trends_day["gtrends"].shift(1)  # lag 1 day — prevent leakage
             trends_day = trends_day.ffill()
-            print(f"[ETL] Google Trends fetched: {len(trends_day)} rows")
+            print(f"[ETL] Google Trends ({keyword}) fetched: {len(trends_day)} rows")
             trends_day.to_csv(cache_file)
             return trends_day
         else:
             raise ValueError("Empty pytrends response")
 
     except Exception as e:
-        print(f"[ETL] WARNING: pytrends failed to fetch Google Trends data ({e}).")
-        print("[ETL] Pytrends often breaks due to rate limits. Using fallback (0s) so pipeline can continue.")
+        print(f"[ETL] WARNING: pytrends failed for '{keyword}' ({e}). Using zeros.")
         idx = pd.date_range(start, end, freq="D")
-        df_dummy = pd.DataFrame({"gtrends": [0.0] * len(idx)}, index=idx)
-        return df_dummy
+        return pd.DataFrame({"gtrends": [0.0] * len(idx)}, index=idx)
+
+
+def fetch_google_trends(start: str, end: str) -> pd.DataFrame:
+    """Fetch Bitcoin Google Trends (backward-compatible wrapper)."""
+    return fetch_google_trends_for("bitcoin", start, end)
+
+
+def fetch_eth_trends(start: str, end: str) -> pd.DataFrame:
+    """Fetch Ethereum Google Trends."""
+    return fetch_google_trends_for("ethereum", start, end)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 4 — Feature Engineering
@@ -819,6 +847,118 @@ def run_backtest(model, scaler, inp_type,
     return bt
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 10.5 — 4-State Portfolio Backtest (BTC + ETH + USDT)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_portfolio_backtest(models_btc, scaler_btc, features_btc,
+                           models_eth, scaler_eth, features_eth,
+                           test_btc: pd.DataFrame, test_eth: pd.DataFrame,
+                           proba_cutoff: float = PROBA_CUTOFF,
+                           fee_rate: float = 0.001) -> pd.DataFrame:
+    """
+    4-State Portfolio Backtest.
+    On each day, we:
+      1. Get signal_btc from the best BTC model (highest ROC-AUC on test set)
+      2. Get signal_eth from the best ETH model
+      3. Map (signal_btc, signal_eth) to the allocation table (PORTFOLIO_STATES)
+      4. Calculate blended daily return = w_btc*ret_btc + w_eth*ret_eth
+    Returns a DataFrame with daily blended returns and cumulative portfolio curve.
+    """
+    # Pick best tree-based model for each asset (by ROC-AUC)
+    def _get_best_signal(models, scaler, X_test):
+        """Return probability and binary signal from the Gradient Boosting model (best default)."""
+        # Prefer GradientBoosting → RandomForest → first available
+        for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest"]:
+            if preferred in models:
+                inp_type, model = models[preferred]
+                X = scaler.transform(X_test) if inp_type == "scaled" else X_test
+                proba = model.predict_proba(X)[:, 1]
+                return proba, (proba >= proba_cutoff).astype(int)
+        # Fallback
+        inp_type, model = list(models.items())[0][1]
+        X = scaler.transform(X_test) if inp_type == "scaled" else X_test
+        proba = model.predict_proba(X)[:, 1]
+        return proba, (proba >= proba_cutoff).astype(int)
+
+    # Align ETH and BTC to same trading dates (intersection)
+    common_idx = test_btc.index.intersection(test_eth.index)
+    test_btc_a = test_btc.loc[common_idx]
+    test_eth_a = test_eth.loc[common_idx]
+
+    X_btc = test_btc_a[features_btc]
+    X_eth = test_eth_a[features_eth]
+
+    proba_btc, signal_btc = _get_best_signal(models_btc, scaler_btc, X_btc)
+    proba_eth, signal_eth = _get_best_signal(models_eth, scaler_eth, X_eth)
+
+    # Build portfolio DataFrame
+    port = pd.DataFrame(index=common_idx)
+    port["signal_btc"]  = signal_btc
+    port["signal_eth"]  = signal_eth
+    port["proba_btc"]   = proba_btc
+    port["proba_eth"]   = proba_eth
+    port["ret_btc"]     = test_btc_a["close"].pct_change().shift(-1).values   # forward daily return
+    port["ret_eth"]     = test_eth_a["close"].pct_change().shift(-1).values
+
+    # Determine allocation weights and labels from portfolio state table
+    port["state_key"]   = list(zip(signal_btc, signal_eth))
+    port["w_btc"]       = port["state_key"].map(lambda k: PORTFOLIO_STATES[k]["btc"])
+    port["w_eth"]       = port["state_key"].map(lambda k: PORTFOLIO_STATES[k]["eth"])
+    port["state_label"] = port["state_key"].map(lambda k: PORTFOLIO_STATES[k]["label"])
+
+    # Blended gross daily return (weighted sum)
+    port["gross_ret"] = port["w_btc"].shift(1) * port["ret_btc"] + \
+                        port["w_eth"].shift(1) * port["ret_eth"]
+
+    # Trading fee: charge fee_rate when allocation changes (position change)
+    port["trade_btc"] = port["w_btc"].diff().abs().fillna(0)
+    port["trade_eth"] = port["w_eth"].diff().abs().fillna(0)
+    port["net_ret"]   = port["gross_ret"] - (port["trade_btc"] + port["trade_eth"]) * fee_rate
+
+    # Kill switch: if blended portfolio lost >5% yesterday, move to USDT today
+    port["kill"]      = (port["net_ret"].shift(1) < -0.05).astype(int)
+    port.loc[port["kill"] == 1, "net_ret"] = 0.0
+
+    # Cumulative portfolio value
+    port["cum_portfolio"] = (1 + port["net_ret"].fillna(0)).cumprod()
+    port["cum_btc_bnh"]   = (1 + port["ret_btc"].fillna(0)).cumprod()   # BTC Buy & Hold benchmark
+    port["cum_eth_bnh"]   = (1 + port["ret_eth"].fillna(0)).cumprod()   # ETH Buy & Hold benchmark
+
+    # Performance summary
+    total_ret  = port["cum_portfolio"].iloc[-1] - 1
+    btc_bnh    = port["cum_btc_bnh"].iloc[-1] - 1
+    eth_bnh    = port["cum_eth_bnh"].iloc[-1] - 1
+    daily_std  = port["net_ret"].std()
+    sharpe     = (port["net_ret"].mean() / daily_std * np.sqrt(252)) if daily_std > 0 else 0
+    roll_max   = port["cum_portfolio"].cummax()
+    max_dd     = ((port["cum_portfolio"] - roll_max) / roll_max).min()
+
+    # State distribution
+    state_counts = port["state_label"].value_counts()
+
+    print(f"\n{'='*60}")
+    print(f"PORTFOLIO BACKTEST RESULTS (4-State BTC+ETH+USDT)")
+    print(f"{'='*60}")
+    print(f"  Period:            {port.index[0].date()} → {port.index[-1].date()}")
+    print(f"  Portfolio Return:  {total_ret:+.2%}")
+    print(f"  BTC Buy&Hold:      {btc_bnh:+.2%}")
+    print(f"  ETH Buy&Hold:      {eth_bnh:+.2%}")
+    print(f"  Sharpe Ratio:      {sharpe:.2f}")
+    print(f"  Max Drawdown:      {max_dd:.2%}")
+    print(f"\n  Days per state:")
+    for label, count in state_counts.items():
+        print(f"    {label}: {count} days ({count/len(port):.1%})")
+    print(f"{'='*60}")
+
+    port.attrs["strat_return"] = total_ret
+    port.attrs["btc_bnh"]      = btc_bnh
+    port.attrs["eth_bnh"]      = eth_bnh
+    port.attrs["sharpe"]       = sharpe
+    port.attrs["max_dd"]       = max_dd
+    return port
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 11 — Next-Day Prediction
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1179,115 +1319,155 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models, output_
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
+def _build_asset_pipeline(ticker: str, keyword: str, macro, fgi, label: str):
+    """
+    Build a complete feature-engineered dataset for one asset (BTC or ETH).
+    Used internally by main() to avoid code duplication.
+    """
+    print(f"\n[Pipeline] Building {label} dataset...")
+    ohlcv  = fetch_asset_ohlcv(ticker, START_DATE, END_DATE)
+    trends = fetch_google_trends_for(keyword, START_DATE, END_DATE)
+    df     = compute_technical_features(ohlcv)
+    df     = integrate_macro_trends(df, macro, trends, fgi)
+    df     = create_target(df, threshold=SIGNAL_THRESHOLD)
+    df     = df.dropna(subset=["target", "ma20", "rsi", "ema26"])
+    print(f"[Pipeline] {label} dataset shape: {df.shape}")
+    return df
+
+
 def main():
     print("\n" + "="*70)
-    print("  AlphaQuest Capital — BTC Signal Pipeline")
-    print("  Sections: ETL → Features → Train → Evaluate → Backtest → Predict")
+    print("  AlphaQuest Capital — Multi-Asset Crypto Signal Pipeline")
+    print("  BTC + ETH + USDT  |  4-State Portfolio Allocation")
     print("="*70 + "\n")
 
-    # ── STEP 1: ETL ──────────────────────────────────────────────────────────
-    print("── STEP 1: ETL ──────────────────────────────────────────────────────")
-    btc    = fetch_btc_ohlcv(START_DATE, END_DATE)
-    macro  = fetch_fred_data(START_DATE, END_DATE, FRED_API_KEY)
-    trends = fetch_google_trends(START_DATE, END_DATE)
-    fgi    = fetch_fear_greed_index(START_DATE, END_DATE)
+    # ── STEP 1: ETL — Shared (macro + FGI) ──────────────────────────────────
+    print("── STEP 1: ETL (Shared Macro + Fear & Greed) ────────────────────────")
+    macro = fetch_fred_data(START_DATE, END_DATE, FRED_API_KEY)
+    fgi   = fetch_fear_greed_index(START_DATE, END_DATE)
 
-    # ── STEP 2: Feature Engineering ──────────────────────────────────────────
-    print("\n── STEP 2: Feature Engineering ──────────────────────────────────────")
-    df = compute_technical_features(btc)
-    df = integrate_macro_trends(df, macro, trends, fgi)
-    df = create_target(df, threshold=SIGNAL_THRESHOLD)
+    # ── STEP 2: Build Asset-Specific Feature Datasets ────────────────────────
+    print("\n── STEP 2: Feature Engineering — BTC ────────────────────────────────")
+    df_btc = _build_asset_pipeline("BTC-USD", "bitcoin",  macro, fgi, "BTC")
 
-    # Drop rows where target or key features are NaN (rolling warm-up)
-    df = df.dropna(subset=["target", "ma20", "rsi", "ema26"])
-
-    print(f"\n[Data] Final dataset shape: {df.shape}")
-    print(f"[Data] Columns: {list(df.columns)}")
+    print("\n── STEP 2B: Feature Engineering — ETH ───────────────────────────────")
+    df_eth = _build_asset_pipeline("ETH-USD", "ethereum", macro, fgi, "ETH")
 
     # ── STEP 3: Time-Based Split ──────────────────────────────────────────────
     print("\n── STEP 3: Time-Based Split ─────────────────────────────────────────")
-    train_df, val_df, test_df = time_split(df)
-
-    # Define feature set (exclude raw OHLCV, target, forward return)
     EXCLUDE = {"open", "high", "low", "close", "volume",
                "target", "forward_ret", "bb_upper", "bb_lower"}
-    features = [c for c in df.columns if c not in EXCLUDE]
-    print(f"[Features] Using {len(features)} features: {features}")
 
-    X_train = train_df[features];  y_train = train_df["target"]
-    X_val   = val_df[features];    y_val   = val_df["target"]
-    X_test  = test_df[features];   y_test  = test_df["target"]
+    def _split_and_select(df):
+        train_df, val_df, test_df = time_split(df)
+        features = [c for c in df.columns if c not in EXCLUDE]
+        X_tr, y_tr = train_df[features], train_df["target"]
+        X_v,  y_v  = val_df[features],   val_df["target"]
+        X_t,  y_t  = test_df[features],  test_df["target"]
+        features_sel, imp_df = select_features(X_tr, y_tr, X_v)
+        return (X_tr[features_sel], y_tr, X_v[features_sel], y_v,
+                X_t[features_sel], y_t, test_df, features_sel, imp_df)
 
-    # ── STEP 4: Feature Selection ─────────────────────────────────────────────
-    print("\n── STEP 4: Feature Selection ────────────────────────────────────────")
-    features_sel, imp_df = select_features(X_train, y_train, X_val)
-    X_train = X_train[features_sel]
-    X_val   = X_val[features_sel]
-    X_test  = X_test[features_sel]
+    (X_train_btc, y_train_btc, X_val_btc, y_val_btc,
+     X_test_btc, y_test_btc, test_df_btc, features_btc, imp_btc) = _split_and_select(df_btc)
 
-    # ── STEP 5: Train Models ──────────────────────────────────────────────────
-    print("\n── STEP 5: Train Models ─────────────────────────────────────────────")
-    models, scaler = train_models(X_train, y_train, X_val, y_val)
+    (X_train_eth, y_train_eth, X_val_eth, y_val_eth,
+     X_test_eth, y_test_eth, test_df_eth, features_eth, imp_eth) = _split_and_select(df_eth)
 
-    # ── STEP 6: Evaluate ─────────────────────────────────────────────────────
-    print("\n── STEP 6: Evaluate Models ──────────────────────────────────────────")
-    metrics_df = evaluate_models(models, scaler,
-                                 X_train, y_train,
-                                 X_val,   y_val,
-                                 X_test,  y_test,
-                                 features_sel)
+    # ── STEP 4: Train BTC Model ───────────────────────────────────────────────
+    print("\n── STEP 4: Train BTC Models ─────────────────────────────────────────")
+    models_btc, scaler_btc = train_models(X_train_btc, y_train_btc, X_val_btc, y_val_btc)
 
-    # ── STEP 7: Backtest ──────────────────────────────────────────────────────
-    print("\n── STEP 7: Backtest ─────────────────────────────────────────────────")
-    backtests = {}
-    bt_rf     = None
+    # ── STEP 4B: Train ETH Model ──────────────────────────────────────────────
+    print("\n── STEP 4B: Train ETH Models ────────────────────────────────────────")
+    models_eth, scaler_eth = train_models(X_train_eth, y_train_eth, X_val_eth, y_val_eth)
 
-    for name, (inp_type, model) in models.items():
-        X_t = scaler.transform(X_test) if inp_type == "scaled" else X_test
-        bt = run_backtest(model, scaler, inp_type,
-                          X_test, test_df,
-                          proba_cutoff=PROBA_CUTOFF,
-                          name=name)
-        backtests[name] = bt
-        if name == "RandomForest":
-            bt_rf = bt
+    # ── STEP 5: Evaluate Both Models ─────────────────────────────────────────
+    print("\n── STEP 5: Evaluate BTC Models ──────────────────────────────────────")
+    metrics_btc = evaluate_models(models_btc, scaler_btc,
+                                  X_train_btc, y_train_btc,
+                                  X_val_btc,   y_val_btc,
+                                  X_test_btc,  y_test_btc,
+                                  features_btc)
 
-    if bt_rf is None:
-        bt_rf = list(backtests.values())[0]   # fallback
+    print("\n── STEP 5B: Evaluate ETH Models ─────────────────────────────────────")
+    metrics_eth = evaluate_models(models_eth, scaler_eth,
+                                  X_train_eth, y_train_eth,
+                                  X_val_eth,   y_val_eth,
+                                  X_test_eth,  y_test_eth,
+                                  features_eth)
 
-    # ── STEP 8: Next-Day Prediction ───────────────────────────────────────────
-    print("\n── STEP 8: Next-Day Prediction ──────────────────────────────────────")
-    # Use best model (RF or first available)
-    best_name, (best_inp, best_model) = list(models.items())[1] \
-        if len(models) > 1 else list(models.items())[0]
+    # ── STEP 6: Individual Asset Backtests (for comparison) ──────────────────
+    print("\n── STEP 6: Individual Backtests (for comparison) ────────────────────")
+    backtests_btc = {}
+    for name, (inp_type, model) in models_btc.items():
+        bt = run_backtest(model, scaler_btc, inp_type, X_test_btc, test_df_btc,
+                          proba_cutoff=PROBA_CUTOFF, name=f"BTC-{name}")
+        backtests_btc[f"BTC-{name}"] = bt
 
-    prediction = predict_next_day(best_model, scaler, best_inp,
-                                  df, features_sel, SIGNAL_THRESHOLD)
+    bt_rf = backtests_btc.get("BTC-GradientBoosting",
+                               list(backtests_btc.values())[0])
+
+    # ── STEP 7: 4-State Portfolio Backtest ───────────────────────────────────
+    print("\n── STEP 7: 4-State Portfolio Backtest (BTC+ETH+USDT) ────────────────")
+    portfolio_bt = run_portfolio_backtest(
+        models_btc, scaler_btc, features_btc,
+        models_eth, scaler_eth, features_eth,
+        test_df_btc, test_df_eth,
+        proba_cutoff=PROBA_CUTOFF
+    )
+
+    # ── STEP 8: Next-Day Predictions (both assets) ────────────────────────────
+    print("\n── STEP 8: Next-Day Predictions ─────────────────────────────────────")
+    gb_btc_name = "GradientBoosting" if "GradientBoosting" in models_btc else list(models_btc.keys())[1]
+    gb_eth_name = "GradientBoosting" if "GradientBoosting" in models_eth else list(models_eth.keys())[1]
+
+    prediction_btc = predict_next_day(models_btc[gb_btc_name][1], scaler_btc,
+                                      models_btc[gb_btc_name][0],
+                                      df_btc, features_btc, SIGNAL_THRESHOLD)
+    prediction_eth = predict_next_day(models_eth[gb_eth_name][1], scaler_eth,
+                                      models_eth[gb_eth_name][0],
+                                      df_eth, features_eth, SIGNAL_THRESHOLD)
+
+    # Combined portfolio state for today
+    combined_key   = (prediction_btc["signal"], prediction_eth["signal"])
+    combined_state = PORTFOLIO_STATES[combined_key]["label"]
+
+    print(f"\n{'='*60}")
+    print(f"  TOMORROW'S PORTFOLIO DECISION")
+    print(f"{'='*60}")
+    print(f"  BTC Signal:  {'🟢 BUY' if prediction_btc['signal'] else '⚪ HOLD'} ({prediction_btc['proba']:.1%})")
+    print(f"  ETH Signal:  {'🟢 BUY' if prediction_eth['signal'] else '⚪ HOLD'} ({prediction_eth['proba']:.1%})")
+    print(f"  Portfolio:   {combined_state}")
+    print(f"{'='*60}")
 
     # ── STEP 8.5: Extract LR Formula ──────────────────────────────────────────
-    print("\n── STEP 8.5: Extract Formula ────────────────────────────────────────")
-    lr_model = models["LogisticRegression"][1]
-    lr_coef_df, lr_formula = extract_lr_formula(lr_model, features_sel)
+    print("\n── STEP 8.5: Extract Formula (BTC model) ───────────────────────────")
+    lr_coef_df, lr_formula = extract_lr_formula(models_btc["LogisticRegression"][1], features_btc)
 
-    # ── STEP 9: Plot Everything ───────────────────────────────────────────────
+    # ── STEP 9: Plots ─────────────────────────────────────────────────────────
     print("\n── STEP 9: Generate Plots ───────────────────────────────────────────")
-    plot_all(df, metrics_df, backtests, bt_rf, imp_df, features_sel, models,
-             output_dir=OUTPUT_DIR)
+    plot_all(df_btc, metrics_btc, backtests_btc, bt_rf, imp_btc, features_btc,
+             models_btc, output_dir=OUTPUT_DIR)
 
     # ── FINAL SUMMARY ────────────────────────────────────────────────────────
     print("\n" + "="*70)
-    print("  PIPELINE COMPLETE")
+    print("  PIPELINE COMPLETE — Multi-Asset Portfolio")
     print("="*70)
-    print(f"\n  Next-Day Signal:  {prediction['signal_label']}")
-    print(f"  Signal Date:      {prediction['date']}")
-    print(f"  Model Confidence: {prediction['proba']:.1%}")
-    print(f"\n  Saved files:")
-    for i in range(1, 6):
-        print(f"    plot{i}_*.png")
+    print(f"  Portfolio Return (4-State): {portfolio_bt.attrs['strat_return']:+.2%}")
+    print(f"  BTC Buy&Hold Benchmark:     {portfolio_bt.attrs['btc_bnh']:+.2%}")
+    print(f"  ETH Buy&Hold Benchmark:     {portfolio_bt.attrs['eth_bnh']:+.2%}")
+    print(f"  Portfolio Sharpe Ratio:     {portfolio_bt.attrs['sharpe']:.2f}")
+    print(f"  Max Drawdown:               {portfolio_bt.attrs['max_dd']:.2%}")
+    print(f"\n  Tomorrow's Portfolio:       {combined_state}")
     print()
 
-    return df, models, scaler, metrics_df, backtests, prediction, lr_coef_df, lr_formula
+    return (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
+            metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
+            prediction_btc, prediction_eth, lr_coef_df, lr_formula)
 
 
 if __name__ == "__main__":
-    df, models, scaler, metrics_df, backtests, prediction, lr_coef_df, lr_formula = main()
+    (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
+     metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
+     prediction_btc, prediction_eth, lr_coef_df, lr_formula) = main()
