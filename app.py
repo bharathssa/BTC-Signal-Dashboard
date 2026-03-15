@@ -144,6 +144,15 @@ def _run_cached_pipeline(_feature_hash):
 
     return btc.main()
 
+# ── Optional Cache Clear Button in Sidebar ──
+st.sidebar.divider()
+if st.sidebar.button("🗑️ Clear Cache & Reload", help="Force the model to retrain from scratch by dropping cached data."):
+    st.cache_data.clear()
+    # Safely clear session state keys by casting to list to avoid runtime errors
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
 if st.button("🚀 Run Full Pipeline", type="primary"):
     with st.spinner("Executing ETL → Feature Engineering → BTC + ETH Training → 4-State Portfolio Backtest… (data cached after first run)"):
         try:
