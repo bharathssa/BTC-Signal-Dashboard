@@ -69,7 +69,7 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             # ═══════════════════════════════════════════════════════════════
             # SECTION 2 — PORTFOLIO KPI CARDS
             # ═══════════════════════════════════════════════════════════════
-            st.header("💰 $50M Portfolio — 4-State Backtest Results (2024)")
+            st.header("💰 $50M Portfolio — 4-State Backtest Results (2025)")
             st.caption("Blended daily returns from BTC + ETH based on model signals. 0.1% fee per trade. 5% kill-switch active.")
 
             strat_ret = portfolio_bt.attrs["strat_return"]
@@ -99,11 +99,11 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
                       delta_color="normal" if sharpe >= 1 else "off")
             k6.metric("📉 Max Drawdown",  f"{max_dd:.2%}", "Worst peak-to-trough loss",
                       delta_color="inverse")
-            k7.metric("₿ BTC Buy&Hold",  f"{btc_bnh:+.2%}", "2024 benchmark")
-            k8.metric("Ξ ETH Buy&Hold",  f"{eth_bnh:+.2%}", "2024 benchmark")
+            k7.metric("₿ BTC Buy&Hold",  f"{btc_bnh:+.2%}", "2025 benchmark")
+            k8.metric("Ξ ETH Buy&Hold",  f"{eth_bnh:+.2%}", "2025 benchmark")
 
             # Days per state
-            st.markdown("### Portfolio State Distribution (2024)")
+            st.markdown("### Portfolio State Distribution (2025)")
             state_counts = portfolio_bt["state_label"].value_counts()
             state_df = pd.DataFrame({
                 "State": state_counts.index,
@@ -114,7 +114,7 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
 
             # IC Summary
             st.info(f"📌 **IC Summary:** Starting from **$50M**, the 4-state BTC+ETH+USDT portfolio "
-                    f"grew to **${final_value/1e6:.2f}M** ({strat_ret:+.1%}) over the 2024 test period. "
+                    f"grew to **${final_value/1e6:.2f}M** ({strat_ret:+.1%}) over the 2025 test period. "
                     f"BTC Buy&Hold returned {btc_bnh:+.1%}; ETH Buy&Hold returned {eth_bnh:+.1%}. "
                     f"The portfolio Sharpe Ratio of **{sharpe:.2f}** "
                     f"{'demonstrates risk-adjusted performance suitable for the IC.' if sharpe >= 0.8 else 'indicates further threshold tuning is recommended.'}")

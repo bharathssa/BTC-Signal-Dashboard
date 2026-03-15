@@ -87,7 +87,7 @@ if not FRED_API_KEY:
     pass
 
 START_DATE      = "2020-01-01"
-END_DATE        = "2024-12-31"
+END_DATE        = "2025-12-31"  # Full year 2025 data (test period)
 SIGNAL_THRESHOLD = 0.00          # 0% threshold: any positive 1-day return = Buy
 PROBA_CUTOFF    = 0.50           # BTC signal probability cutoff
 ETH_PROBA_CUTOFF = 0.57          # ETH cutoff is HIGHER — filter out weak ETH signals
@@ -554,16 +554,16 @@ def select_features(X_train: pd.DataFrame,
 def time_split(df: pd.DataFrame):
     """
     Strict time-based split:
-      Training:   2020-2022 (60%)
-      Validation: 2023      (20%)
-      Test:       2024      (20%)
+      Training:   2020-2023  (Train on 4 years of data)
+      Validation: 2024       (Tune on 2024 bull market)
+      Test:       2025       (Out-of-sample on full 2025 data)
     Random splits would constitute look-ahead bias.
     """
     df = df.dropna()
 
-    train = df[df.index < "2023-01-01"]
-    val   = df[(df.index >= "2023-01-01") & (df.index < "2024-01-01")]
-    test  = df[df.index >= "2024-01-01"]
+    train = df[df.index < "2024-01-01"]
+    val   = df[(df.index >= "2024-01-01") & (df.index < "2025-01-01")]
+    test  = df[df.index >= "2025-01-01"]
 
     print(f"[Split] Train: {len(train)} ({train.index[0].date()}→{train.index[-1].date()})"
           f"  |  Val: {len(val)} ({val.index[0].date()}→{val.index[-1].date()})"
