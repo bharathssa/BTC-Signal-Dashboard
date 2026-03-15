@@ -29,16 +29,12 @@ st.markdown("**FINTECH 717 — Investment Committee Pitch**  |  Strategy: BTC + 
 CAPITAL = 50_000_000   # $50M unallocated capital
 btc.OUTPUT_DIR = "."
 
-@st.cache_resource(show_spinner="First-time load: Executing ETL & Training Models (this caches for instant future loads!)...")
-def get_cached_pipeline_results():
-    return btc.main()
-
-if st.button("🚀 Run Full Pipeline (Now Cached & Instant)", type="primary"):
-    with st.spinner("Fetching pre-trained models from cache..."):
+if st.button("🚀 Run Full Pipeline", type="primary"):
+    with st.spinner("Executing ETL → Feature Engineering → BTC + ETH Training → 4-State Portfolio Backtest…"):
         try:
             (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
              metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
-             prediction_btc, prediction_eth, lr_coef_df, lr_formula) = get_cached_pipeline_results()
+             prediction_btc, prediction_eth, lr_coef_df, lr_formula) = btc.main()
 
             st.success("✅ Pipeline executed successfully — BTC + ETH dual-model complete!")
 
