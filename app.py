@@ -70,7 +70,9 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             # SECTION 2 — PORTFOLIO KPI CARDS
             # ═══════════════════════════════════════════════════════════════
             st.header("💰 $50M Portfolio — 4-State Backtest Results (2025)")
-            st.caption("Blended daily returns from BTC + ETH based on model signals. 0.1% fee per trade. 5% kill-switch active.")
+            st.caption(f"Blended daily returns from BTC + ETH based on model signals. 0.1% fee per trade. 5% kill-switch active. "
+                       f"| **BTC Model:** {prediction_btc.get('model_name', 'Unknown')} "
+                       f"| **ETH Model:** {prediction_eth.get('model_name', 'Unknown')}")
 
             strat_ret = portfolio_bt.attrs["strat_return"]
             btc_bnh   = portfolio_bt.attrs["btc_bnh"]
@@ -126,10 +128,10 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             # ═══════════════════════════════════════════════════════════════
             st.header("💲 Current Prices")
             p1, p2 = st.columns(2)
-            p1.metric("Bitcoin (BTC)", f"${prediction_btc['close']:,.2f}", f"{prediction_btc['today_ret']:+.2%} today")
+            p1.metric("Bitcoin (BTC)", f"${prediction_btc['close']:,.2f}", f"{prediction_btc['today_ret']:+.2%} on {prediction_btc['date']}")
             p1.caption(f"🧠 Selected Model: **{prediction_btc.get('model_name', 'Unknown')}**")
             
-            p2.metric("Ethereum (ETH)", f"${prediction_eth['close']:,.2f}", f"{prediction_eth['today_ret']:+.2%} today")
+            p2.metric("Ethereum (ETH)", f"${prediction_eth['close']:,.2f}", f"{prediction_eth['today_ret']:+.2%} on {prediction_eth['date']}")
             p2.caption(f"🧠 Selected Model: **{prediction_eth.get('model_name', 'Unknown')}**")
 
             st.divider()
