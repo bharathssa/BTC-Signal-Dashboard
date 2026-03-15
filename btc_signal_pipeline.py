@@ -1389,7 +1389,7 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
     if portfolio_bt is not None:
         fig7, ax7 = plt.subplots(figsize=(16, 8), facecolor=BG)
         ax7.set_facecolor(BG)
-        fig7.suptitle("Cumulative Return — 4-State Portfolio vs BTC Buy&Hold vs ETH Buy&Hold (2024 Test Period)",
+        fig7.suptitle("Cumulative Return — 4-State Portfolio vs BTC Buy&Hold vs ETH Buy&Hold (2025 Test Period)",
                       color=TEXT, fontsize=13, fontweight="bold", y=1.01)
 
         port_ret = portfolio_bt.attrs["strat_return"]
