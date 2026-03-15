@@ -286,6 +286,7 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     # Moving averages
     df["ma5"]      = close.rolling(5).mean()
     df["ma20"]     = close.rolling(20).mean()
+    df["ma50"]     = close.rolling(50).mean()
     df["ma200"]    = close.rolling(200).mean()
     df["ma_ratio"] = df["ma20"] / df["ma200"] # >1.0 = MA-20 above MA-200 (bullish long-term trend)
 
