@@ -58,17 +58,27 @@ with st.sidebar:
 
     st.divider()
     st.markdown("<div class='sidebar-header'>🎯 Signal Probability Cutoffs</div>", unsafe_allow_html=True)
+
+    # Show pipeline recommended cutoff as a hint if available
+    _rec_btc = st.session_state.get("best_btc_cutoff", None)
+    _rec_eth = st.session_state.get("best_eth_cutoff", None)
+    _btc_default = _rec_btc if _rec_btc is not None else 0.55
+    _eth_default = _rec_eth if _rec_eth is not None else 0.63
+
+    if _rec_btc is not None:
+        st.caption(f"✅ **Recommended by model (2024 val):** BTC = {_rec_btc:.2f} | ETH = {_rec_eth:.2f}")
+
     btc_cutoff = st.slider(
         "BTC Buy Threshold",
-        min_value=0.40, max_value=0.75, value=0.55, step=0.01,
+        min_value=0.40, max_value=0.75, value=_btc_default, step=0.01,
         format="%.2f",
-        help="Minimum probability for a BTC buy signal. Higher = fewer but more selective trades. Default 0.55 is more conservative than the training cutoff.",
+        help=f"Minimum probability for a BTC buy signal. Model-recommended: {_btc_default:.2f} (auto-tuned on 2024 validation).",
     )
     eth_cutoff = st.slider(
         "ETH Buy Threshold",
-        min_value=0.40, max_value=0.75, value=0.63, step=0.01,
+        min_value=0.40, max_value=0.75, value=_eth_default, step=0.01,
         format="%.2f",
-        help="Minimum probability for an ETH buy signal. Default 0.63 is conservative — ETH is more volatile so we require high confidence.",
+        help=f"Minimum probability for an ETH buy signal. Model-recommended: {_eth_default:.2f} (auto-tuned on 2024 validation).",
     )
 
     st.divider()
@@ -136,29 +146,32 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
         try:
             (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
              metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
-             prediction_btc, prediction_eth, lr_coef_df, lr_formula) = _run_cached_pipeline()
+             prediction_btc, prediction_eth, lr_coef_df, lr_formula,
+             best_btc_cutoff, best_eth_cutoff) = _run_cached_pipeline()
 
             # ── Store trained artefacts in session_state so sidebar can reuse them ──
-            st.session_state["pipeline_done"]   = True
-            st.session_state["df_btc"]          = df_btc
-            st.session_state["df_eth"]          = df_eth
-            st.session_state["models_btc"]      = models_btc
-            st.session_state["models_eth"]      = models_eth
-            st.session_state["scaler_btc"]      = scaler_btc
-            st.session_state["scaler_eth"]      = scaler_eth
-            # Use CORE_FEATURES — the exact 7 features the models were trained on.
+            st.session_state["pipeline_done"]     = True
+            st.session_state["df_btc"]            = df_btc
+            st.session_state["df_eth"]            = df_eth
+            st.session_state["models_btc"]        = models_btc
+            st.session_state["models_eth"]        = models_eth
+            st.session_state["scaler_btc"]        = scaler_btc
+            st.session_state["scaler_eth"]        = scaler_eth
+            # Use CORE_FEATURES — the exact 10 features the models were trained on.
             # Do NOT recompute from column difference; that produces extra columns
             # that the fitted model has never seen (causes sklearn feature-name error).
             core_feats = [f for f in btc.CORE_FEATURES if f in df_btc.columns]
-            st.session_state["features_btc"]    = core_feats
-            st.session_state["features_eth"]    = [f for f in btc.CORE_FEATURES if f in df_eth.columns]
-            st.session_state["metrics_btc"]     = metrics_btc
-            st.session_state["metrics_eth"]     = metrics_eth
-            st.session_state["backtests_btc"]   = backtests_btc
-            st.session_state["prediction_btc"]  = prediction_btc
-            st.session_state["prediction_eth"]  = prediction_eth
-            st.session_state["lr_coef_df"]      = lr_coef_df
-            st.session_state["lr_formula"]      = lr_formula
+            st.session_state["features_btc"]      = core_feats
+            st.session_state["features_eth"]      = [f for f in btc.CORE_FEATURES if f in df_eth.columns]
+            st.session_state["metrics_btc"]       = metrics_btc
+            st.session_state["metrics_eth"]       = metrics_eth
+            st.session_state["backtests_btc"]     = backtests_btc
+            st.session_state["prediction_btc"]    = prediction_btc
+            st.session_state["prediction_eth"]    = prediction_eth
+            st.session_state["lr_coef_df"]        = lr_coef_df
+            st.session_state["lr_formula"]        = lr_formula
+            st.session_state["best_btc_cutoff"]   = best_btc_cutoff
+            st.session_state["best_eth_cutoff"]   = best_eth_cutoff
 
             st.success("✅ Pipeline executed successfully — BTC + ETH dual-model complete!")
 

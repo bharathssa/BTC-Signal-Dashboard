@@ -100,7 +100,7 @@ OUTPUT_DIR      = "."            # where to save plots
 # The only difference is the underlying price & Google Trends data source.
 # ─────────────────────────────────────────────────────────────────────────────
 CORE_FEATURES = [
-    "trend_score",      # EMA crossover + MACD histogram (BTC-specific)
+    "trend_score",      # EMA crossover + MACD histogram (asset-specific trend composite)
     "macro_pressure",   # Fed Rate + Bond Yield change (SHARED - same for both)
     "rsi",              # RSI-14 overbought/oversold (asset-specific)
     "fear_greed",       # Crypto Fear & Greed Index (SHARED)
@@ -108,6 +108,8 @@ CORE_FEATURES = [
     "adx",              # ADX trend strength (asset-specific)
     "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific)
     "ma_ratio",         # Short/Long term trend regime (MA20 / MA200)
+    "bb_pct",           # Bollinger Band % position — price vs upper/lower band (reversal/breakout signal)
+    "vol_ratio",        # Volume vs 5-day avg — confirms trend conviction (volume surge = real move)
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
@@ -594,11 +596,12 @@ def train_models(X_train, y_train, X_val, y_val):
 
     models = {}
 
-    # 1. Logistic Regression (high-C = less regularisation for interpretability)
-    print("[Train] Logistic Regression...")
+    # 1. Logistic Regression — L1 penalty (LASSO) handles 10 features better,
+    #    naturally zeroes out noise features. saga solver required for L1.
+    print("[Train] Logistic Regression (L1 / saga)...")
     lr = LogisticRegression(
-        C=1.0, class_weight="balanced", max_iter=2000,
-        solver="lbfgs", random_state=42
+        C=0.5, penalty="l1", solver="saga", class_weight="balanced",
+        max_iter=3000, random_state=42
     )
     lr.fit(X_tr_sc, y_train)
     models["LogisticRegression"] = ("scaled", lr)
@@ -615,11 +618,13 @@ def train_models(X_train, y_train, X_val, y_val):
     rf.fit(X_train, y_train)
     models["RandomForest"] = ("raw", rf)
 
-    # 3. Gradient Boosting — AUC optimization requires low learning rate and subsourcing
+    # 3. Gradient Boosting — max_depth=3 captures 3-way feature interactions
+    #    (e.g., trend-up AND volume-spike AND fear_greed low → strong buy signal)
     print("[Train] Gradient Boosting (sklearn)...")
     gb = GradientBoostingClassifier(
-        n_estimators=1000, max_depth=2, learning_rate=0.01,
-        subsample=0.6, max_features=0.5, random_state=42
+        n_estimators=500, max_depth=3, learning_rate=0.02,
+        subsample=0.7, max_features=0.6, min_samples_leaf=5,
+        random_state=42
     )
     gb.fit(X_train, y_train)
     models["GradientBoosting"] = ("raw", gb)
@@ -679,7 +684,68 @@ def train_models(X_train, y_train, X_val, y_val):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SECTION 8.3 — Optimal Cutoff Discovery (Validation-based)
+# ─────────────────────────────────────────────────────────────────────────────
+def find_optimal_cutoff(
+    models:   dict,
+    scaler,
+    features: list,
+    val_df:   pd.DataFrame,
+    sweep_start: float = 0.45,
+    sweep_end:   float = 0.72,
+    step:        float = 0.01,
+) -> float:
+    """
+    Sweep probability cutoffs on the validation set (2024) and select the one
+    that maximises a composite score:
+        score = 0.40 * Precision + 0.40 * F1 + 0.20 * ROC_AUC
+
+    This removes the guesswork from setting the sidebar slider default.
+    Uses the best tree model (GradientBoosting > EnsembleVoter > RandomForest).
+    """
+    from sklearn.metrics import precision_score, f1_score, roc_auc_score
+
+    # Pick best tree model for cutoff discovery
+    model_name = None
+    for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest", "XGBoost", "LightGBM"]:
+        if preferred in models:
+            model_name = preferred
+            break
+    if model_name is None:
+        model_name = list(models.keys())[0]
+
+    inp_type, model = models[model_name]
+    X_val = val_df[features]
+    y_val = val_df["target"]
+
+    Xp = scaler.transform(X_val) if inp_type == "scaled" else X_val
+    proba = model.predict_proba(Xp)[:, 1]
+    auc   = roc_auc_score(y_val, proba) if len(y_val.unique()) > 1 else 0.5
+
+    best_score   = -np.inf
+    best_cutoff  = 0.50
+    cutoffs = np.arange(sweep_start, sweep_end + step / 2, step)
+
+    for cutoff in cutoffs:
+        y_pred = (proba >= cutoff).astype(int)
+        buy_rate = y_pred.mean()
+        if buy_rate < 0.05 or buy_rate > 0.90:   # ignore degenerate cutoffs
+            continue
+        prec = precision_score(y_val, y_pred, zero_division=0)
+        f1   = f1_score(y_val, y_pred, zero_division=0)
+        score = 0.40 * prec + 0.40 * f1 + 0.20 * auc
+        if score > best_score:
+            best_score  = score
+            best_cutoff = cutoff
+
+    print(f"[Cutoff] {model_name} optimal cutoff = {best_cutoff:.2f}  "
+          f"(score {best_score:.4f} on validation 2024)")
+    return round(float(best_cutoff), 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SECTION 8.5 — LR Formula Extraction
+
 # ─────────────────────────────────────────────────────────────────────────────
 def extract_lr_formula(model, feature_names):
     """Extract coefficients and intercept from a fitted LogisticRegression model."""
@@ -1593,13 +1659,13 @@ def main():
         X_t,  y_t  = test_df[features],  test_df["target"]
         features_sel, imp_df = select_features(X_tr, y_tr, X_v)
         return (X_tr[features_sel], y_tr, X_v[features_sel], y_v,
-                X_t[features_sel], y_t, test_df, features_sel, imp_df)
+                X_t[features_sel], y_t, test_df, val_df, features_sel, imp_df)
 
     (X_train_btc, y_train_btc, X_val_btc, y_val_btc,
-     X_test_btc, y_test_btc, test_df_btc, features_btc, imp_btc) = _split_and_select(df_btc)
+     X_test_btc, y_test_btc, test_df_btc, val_df_btc, features_btc, imp_btc) = _split_and_select(df_btc)
 
     (X_train_eth, y_train_eth, X_val_eth, y_val_eth,
-     X_test_eth, y_test_eth, test_df_eth, features_eth, imp_eth) = _split_and_select(df_eth)
+     X_test_eth, y_test_eth, test_df_eth, val_df_eth, features_eth, imp_eth) = _split_and_select(df_eth)
 
     # ── STEP 4: Train BTC Model ───────────────────────────────────────────────
     print("\n── STEP 4: Train BTC Models ─────────────────────────────────────────")
@@ -1645,6 +1711,14 @@ def main():
         eth_proba_cutoff=ETH_PROBA_CUTOFF
     )
 
+    # ── STEP 7.5: Auto-discover optimal probability cutoffs on validation set ──
+    print("\n── STEP 7.5: Optimal Cutoff Discovery (2024 Validation) ─────────────")
+    best_btc_cutoff = find_optimal_cutoff(
+        models_btc, scaler_btc, features_btc, val_df_btc)
+    best_eth_cutoff = find_optimal_cutoff(
+        models_eth, scaler_eth, features_eth, val_df_eth)
+    print(f"[Cutoff] Best BTC cutoff = {best_btc_cutoff:.2f} | Best ETH cutoff = {best_eth_cutoff:.2f}")
+
     # ── STEP 8: Next-Day Predictions (both assets) ────────────────────────────
     print("\n── STEP 8: Next-Day Predictions ─────────────────────────────────────")
     gb_btc_name = "GradientBoosting" if "GradientBoosting" in models_btc else list(models_btc.keys())[1]
@@ -1652,10 +1726,12 @@ def main():
 
     prediction_btc = predict_next_day(models_btc[gb_btc_name][1], scaler_btc,
                                       models_btc[gb_btc_name][0],
-                                      df_btc, features_btc, SIGNAL_THRESHOLD)
+                                      df_btc, features_btc, SIGNAL_THRESHOLD,
+                                      proba_cutoff=best_btc_cutoff)
     prediction_eth = predict_next_day(models_eth[gb_eth_name][1], scaler_eth,
                                       models_eth[gb_eth_name][0],
-                                      df_eth, features_eth, SIGNAL_THRESHOLD)
+                                      df_eth, features_eth, SIGNAL_THRESHOLD,
+                                      proba_cutoff=best_eth_cutoff)
 
     # Combined portfolio state for today
     combined_key   = (prediction_btc["signal"], prediction_eth["signal"])
@@ -1696,7 +1772,8 @@ def main():
 
     return (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
             metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
-            prediction_btc, prediction_eth, lr_coef_df, lr_formula)
+            prediction_btc, prediction_eth, lr_coef_df, lr_formula,
+            best_btc_cutoff, best_eth_cutoff)
 
 
 if __name__ == "__main__":
