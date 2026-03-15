@@ -126,7 +126,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 # PIPELINE BUTTON — cache the heavy ML training; backtest reruns via sidebar
 # ══════════════════════════════════════════════════════════════════════════════
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=86400)   # 24 hours — no API calls for a full day
 def _run_cached_pipeline():
     """Cache trained models + raw data for 1 hour. Backtest reruns separately."""
     return btc.main()
