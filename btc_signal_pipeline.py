@@ -701,13 +701,13 @@ def find_optimal_cutoff(
 ) -> float:
     """
     Sweep probability cutoffs on the validation set (2024) and select the one
-    that maximises a composite score:
-        score = 0.40 * Precision + 0.40 * F1 + 0.20 * ROC_AUC
-
+    that explicitly balances Precision and Recall (targeting ~50% for both, as requested).
+    Score = F1_Score - abs(Precision - Recall)
+    
     This removes the guesswork from setting the sidebar slider default.
     Uses the best tree model (GradientBoosting > EnsembleVoter > RandomForest).
     """
-    from sklearn.metrics import precision_score, f1_score, roc_auc_score
+    from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 
     # Pick best tree model for cutoff discovery
     model_name = None
@@ -736,14 +736,21 @@ def find_optimal_cutoff(
         if buy_rate < 0.05 or buy_rate > 0.90:   # ignore degenerate cutoffs
             continue
         prec = precision_score(y_val, y_pred, zero_division=0)
+        rec  = recall_score(y_val, y_pred, zero_division=0)
         f1   = f1_score(y_val, y_pred, zero_division=0)
-        score = 0.40 * prec + 0.40 * f1 + 0.20 * auc
+        
+        # Explicit objective: Balance Precision and Recall (target ~50% each)
+        imbalance_diff = abs(prec - rec)
+        score = f1 - (1.5 * imbalance_diff)  # Heavy penalty for unbalanced states
+        
         if score > best_score:
             best_score  = score
             best_cutoff = cutoff
+            best_p = prec
+            best_r = rec
 
     print(f"[Cutoff] {model_name} optimal cutoff = {best_cutoff:.2f}  "
-          f"(score {best_score:.4f} on validation 2024)")
+          f"(P: {best_p:.2f}, R: {best_r:.2f}, score: {best_score:.4f} on validation 2024)")
     return round(float(best_cutoff), 2)
 
 
