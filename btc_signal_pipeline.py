@@ -1013,7 +1013,8 @@ def predict_next_day(model, scaler, inp_type,
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 12 — Plotting
 # ─────────────────────────────────────────────────────────────────────────────
-def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models, output_dir="."):
+def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
+             df_eth=None, portfolio_bt=None, output_dir="."):
     """Generate all visualisation plots and save to files."""
 
     BG      = "#0d1117"
@@ -1313,7 +1314,107 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models, output_
     plt.close()
     print("[Plot] 5/5 — Feature Analysis saved")
 
-    print(f"\n[Plots] All 5 charts saved to: {os.path.abspath(output_dir)}/")
+    # ── PLOT 6: ETH Technical Indicators ──────────────────────────────────
+    if df_eth is not None:
+        fig6 = plt.figure(figsize=(16, 13), facecolor=BG)
+        fig6.suptitle("ETH Technical Indicator Overview — Full Period",
+                      color=TEXT, fontsize=14, fontweight="bold", y=0.98)
+        gs6 = gridspec.GridSpec(4, 1, hspace=0.07, height_ratios=[4, 1.5, 1.5, 1])
+
+        e1 = fig6.add_subplot(gs6[0])
+        e2 = fig6.add_subplot(gs6[1], sharex=e1)
+        e3 = fig6.add_subplot(gs6[2], sharex=e1)
+        e4 = fig6.add_subplot(gs6[3], sharex=e1)
+
+        for ax in [e1, e2, e3, e4]:
+            ax.grid(True, alpha=0.4)
+            ax.tick_params(labelbottom=False)
+        e4.tick_params(labelbottom=True)
+
+        # Price + MAs
+        ETH_COL = "#ce93d8"   # purple for ETH
+        e1.plot(df_eth.index, df_eth["close"],  color="#b0bec5", lw=0.8, alpha=0.9, label="ETH Close")
+        e1.plot(df_eth.index, df_eth["ma5"],    color=ETH_COL, lw=1.2, label="MA-5")
+        e1.plot(df_eth.index, df_eth["ma20"],   color=ORNG,    lw=1.4, label="MA-20")
+        e1.plot(df_eth.index, df_eth["ema12"],  color=CYAN,    lw=1.0, ls="--", alpha=0.8, label="EMA-12")
+        if "ma200" in df_eth.columns:
+            e1.plot(df_eth.index, df_eth["ma200"], color="#607d8b", lw=1.5, ls=":", alpha=0.8, label="MA-200")
+        e1.set_ylabel("Price (USD)", fontsize=9)
+        e1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+        e1.legend(loc="upper left", fontsize=8, ncol=5)
+
+        # RSI
+        e2.plot(df_eth.index, df_eth["rsi"], color=ETH_COL, lw=1.1)
+        e2.axhline(70, color=RED,   lw=1, ls="--", alpha=0.8)
+        e2.axhline(30, color=GREEN, lw=1, ls="--", alpha=0.8)
+        e2.fill_between(df_eth.index, df_eth["rsi"], 70, where=(df_eth["rsi"] >= 70),
+                         color=RED, alpha=0.2, interpolate=True)
+        e2.fill_between(df_eth.index, df_eth["rsi"], 30, where=(df_eth["rsi"] <= 30),
+                         color=GREEN, alpha=0.2, interpolate=True)
+        e2.set_ylabel("RSI-14", fontsize=9)
+        e2.set_ylim(0, 100)
+        e2.text(df_eth.index[-1], 72, "OB(70)", color=RED,   fontsize=7, ha="right")
+        e2.text(df_eth.index[-1], 28, "OS(30)", color=GREEN, fontsize=7, ha="right")
+
+        # MACD
+        eth_colors = [GREEN if v >= 0 else RED for v in df_eth["macd_hist"]]
+        e3.bar(df_eth.index, df_eth["macd_hist"], color=eth_colors, alpha=0.7, width=1)
+        e3.plot(df_eth.index, df_eth["macd"],     color=CYAN,    lw=0.9, label="MACD")
+        e3.plot(df_eth.index, df_eth["macd_sig"], color=ORNG,    lw=0.9, label="Signal")
+        e3.axhline(0, color=TEXT, lw=0.5)
+        e3.set_ylabel("MACD", fontsize=9)
+        e3.legend(loc="upper left", fontsize=7)
+
+        # Volume
+        eth_vol_colors = [GREEN if df_eth["close"].iloc[i] >= df_eth["close"].iloc[i-1] else RED
+                          for i in range(len(df_eth))]
+        e4.bar(df_eth.index, df_eth["volume"] / 1e9, color=eth_vol_colors, alpha=0.65, width=1)
+        e4.set_ylabel("Vol (B$)", fontsize=9)
+        e4.tick_params(labelbottom=True)
+
+        plt.savefig(f"{output_dir}/plot6_eth_technicals.png",
+                    dpi=130, bbox_inches="tight", facecolor=BG)
+        plt.close()
+        print("[Plot] 6/7 — ETH Technicals saved")
+
+    # ── PLOT 7: Cumulative Return Comparison (Portfolio vs BTC vs ETH) ────
+    if portfolio_bt is not None:
+        fig7, ax7 = plt.subplots(figsize=(16, 8), facecolor=BG)
+        ax7.set_facecolor(BG)
+        fig7.suptitle("Cumulative Return — 4-State Portfolio vs BTC Buy&Hold vs ETH Buy&Hold (2024 Test Period)",
+                      color=TEXT, fontsize=13, fontweight="bold", y=1.01)
+
+        port_ret = portfolio_bt.attrs["strat_return"]
+        btc_ret  = portfolio_bt.attrs["btc_bnh"]
+        eth_ret  = portfolio_bt.attrs["eth_bnh"]
+
+        ax7.plot(portfolio_bt.index, portfolio_bt["cum_portfolio"],
+                 color=GOLD,   lw=2.5, label=f"🏆 4-State Portfolio  ({port_ret:+.1%})")
+        ax7.plot(portfolio_bt.index, portfolio_bt["cum_btc_bnh"],
+                 color=CYAN,   lw=1.8, ls="--", label=f"₿ BTC Buy & Hold  ({btc_ret:+.1%})")
+        ax7.plot(portfolio_bt.index, portfolio_bt["cum_eth_bnh"],
+                 color="#ce93d8", lw=1.8, ls="--", label=f"Ξ ETH Buy & Hold  ({eth_ret:+.1%})")
+        ax7.axhline(1.0, color=TEXT, lw=0.7, alpha=0.4, ls=":")
+
+        # Shade USDT (defensive) periods
+        is_usdt = (portfolio_bt["w_btc"] == 0) & (portfolio_bt["w_eth"] == 0)
+        ax7.fill_between(portfolio_bt.index, ax7.get_ylim()[0], ax7.get_ylim()[1],
+                         where=is_usdt, color="#455a64", alpha=0.18, label="🛡️ USDT (Defensive)")
+
+        ax7.set_ylabel("Cumulative Return (×1 = starting capital)", fontsize=10)
+        ax7.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}×"))
+        ax7.set_xlabel("Date", fontsize=10)
+        ax7.legend(fontsize=10, loc="upper left")
+        ax7.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/plot7_cumulative_returns.png",
+                    dpi=130, bbox_inches="tight", facecolor=BG)
+        plt.close()
+        print("[Plot] 7/7 — Cumulative Returns saved")
+
+    total_plots = 7 if (df_eth is not None and portfolio_bt is not None) else 5
+    print(f"\n[Plots] All {total_plots} charts saved to: {os.path.abspath(output_dir)}/")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1448,7 +1549,7 @@ def main():
     # ── STEP 9: Plots ─────────────────────────────────────────────────────────
     print("\n── STEP 9: Generate Plots ───────────────────────────────────────────")
     plot_all(df_btc, metrics_btc, backtests_btc, bt_rf, imp_btc, features_btc,
-             models_btc, output_dir=OUTPUT_DIR)
+             models_btc, df_eth=df_eth, portfolio_bt=portfolio_bt, output_dir=OUTPUT_DIR)
 
     # ── FINAL SUMMARY ────────────────────────────────────────────────────────
     print("\n" + "="*70)
@@ -1460,6 +1561,10 @@ def main():
     print(f"  Portfolio Sharpe Ratio:     {portfolio_bt.attrs['sharpe']:.2f}")
     print(f"  Max Drawdown:               {portfolio_bt.attrs['max_dd']:.2%}")
     print(f"\n  Tomorrow's Portfolio:       {combined_state}")
+    print(f"\n  Saved plots:")
+    for i, name in enumerate(["BTC Technicals","Model Evaluation","Confusion Matrices",
+                               "BTC Backtest","Features","ETH Technicals","Cumulative Returns"], 1):
+        print(f"    plot{i}_{name.lower().replace(' ','_')}.png")
     print()
 
     return (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,

@@ -137,12 +137,42 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             st.header("📊 Pipeline & Backtest Charts")
             st.caption(f"BTC Model | PROBA_CUTOFF: {btc.PROBA_CUTOFF:.0%} | Kill Switch: -5% daily stop")
 
-            for p in ["plot1_btc_technicals.png", "plot2_model_evaluation.png",
-                      "plot3_confusion_matrices.png", "plot4_backtest.png", "plot5_features.png"]:
+            # ── Cumulative Return (most important — show first) ──────────────────
+            st.subheader("📈 Cumulative Return: Portfolio vs BTC vs ETH Buy & Hold")
+            p7 = "plot7_cumulative_returns.png"
+            if os.path.exists(p7):
+                st.image(p7, use_container_width=True)
+            else:
+                st.warning("Run the pipeline to generate the cumulative return chart.")
+
+            st.divider()
+
+            # ── BTC Technicals ──────────────────────────────────────────────────
+            st.subheader("₿ BTC Technical Indicator Overview")
+            p1 = "plot1_btc_technicals.png"
+            if os.path.exists(p1):
+                st.image(p1, use_container_width=True)
+            else:
+                st.warning("BTC Technicals chart not found — run pipeline first.")
+
+            # ── ETH Technicals ──────────────────────────────────────────────────
+            st.subheader("Ξ ETH Technical Indicator Overview")
+            p6 = "plot6_eth_technicals.png"
+            if os.path.exists(p6):
+                st.image(p6, use_container_width=True)
+            else:
+                st.warning("ETH Technicals chart not found — run pipeline first.")
+
+            st.divider()
+
+            # ── Remaining charts (model evaluation, confusion, backtest, features) ─
+            st.subheader("🧪 Model Diagnostics")
+            for p in ["plot2_model_evaluation.png", "plot3_confusion_matrices.png",
+                      "plot4_backtest.png", "plot5_features.png"]:
                 if os.path.exists(p):
                     st.image(p, use_container_width=True)
                 else:
-                    st.warning(f"Plot '{p}' not found — run pipeline first.")
+                    st.warning(f"'{p}' not found — run pipeline first.")
 
             st.divider()
 
