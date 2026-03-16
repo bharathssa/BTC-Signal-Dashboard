@@ -624,13 +624,18 @@ def train_models(X_train, y_train, X_val, y_val):
 
     # 3. Gradient Boosting — max_depth=3 captures 3-way feature interactions
     #    (e.g., trend-up AND volume-spike AND fear_greed low → strong buy signal)
+    #    NOTE: GB doesn't support class_weight natively. Provide sample_weight to .fit()
+    #    to prevent it from predicting low probabilities due to majority "Hold" class.
+    from sklearn.utils.class_weight import compute_sample_weight
+    sample_w = compute_sample_weight(class_weight="balanced", y=y_train)
+    
     print("[Train] Gradient Boosting (sklearn)...")
     gb = GradientBoostingClassifier(
         n_estimators=500, max_depth=3, learning_rate=0.02,
         subsample=0.7, max_features=0.6, min_samples_leaf=5,
         random_state=42
     )
-    gb.fit(X_train, y_train)
+    gb.fit(X_train, y_train, sample_weight=sample_w)
     models["GradientBoosting"] = ("raw", gb)
 
     # 4. XGBoost (Excellent at handling nonlinear technical indicators)
@@ -695,7 +700,7 @@ def find_optimal_cutoff(
     scaler,
     features: list,
     val_df:   pd.DataFrame,
-    sweep_start: float = 0.35,   # Expanded range down to 0.35 to allow finding true 50/50 balance
+    sweep_start: float = 0.25,   # Expanded deeply down to 0.25 to unlock maximum trade optimism
     sweep_end:   float = 0.65,
     step:        float = 0.01,
 ) -> float:
