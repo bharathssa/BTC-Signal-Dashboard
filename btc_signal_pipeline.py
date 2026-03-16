@@ -102,7 +102,7 @@ OUTPUT_DIR      = "."            # where to save plots
 CORE_FEATURES = [
     "macd_ema_trend_score",      # EMA crossover + MACD histogram (asset-specific trend composite)
     "rsi",              # RSI-14 overbought/oversold (asset-specific momentum oscillator)
-    "ma20_vs_ma200_ratio",         # Short/Long term trend regime (MA20 / MA200)
+    "ma9_vs_ma21_bull", # Fast short/long term trend regime crossover (MA9 / MA21)
     "volume_vs_5d_avg",        # Volume vs 5-day avg — confirms trend conviction
     "win_rate_10d",     # 10-day win rate: % of last 10 days that closed up
     # --- Mandated by User ---
@@ -872,7 +872,9 @@ def run_backtest(model, scaler, inp_type,
                  test_df: pd.DataFrame,
                  proba_cutoff: float = 0.50,
                  fee_rate: float = 0.001,
-                 name: str = "Strategy") -> pd.DataFrame:
+                 name: str = "Strategy",
+                 regime_overlay: bool = True,
+                 regime_ma_days: int = 20) -> pd.DataFrame:
     """
     Backtest logic:
       - Buy at Close_t, exit at Close_{t+1}
@@ -885,6 +887,12 @@ def run_backtest(model, scaler, inp_type,
     proba   = model.predict_proba(X)[:, 1] if hasattr(model, "predict_proba") \
               else model.predict(X).astype(float)
     signal  = (proba >= proba_cutoff).astype(int)
+
+    # ── Bull Regime Overlay (MA9 > MA21) ──────────────────────────────────────
+    if regime_overlay and "ma9_vs_ma21_bull" in test_df.columns:
+        bull_regime = (test_df["ma9_vs_ma21_bull"].rolling(regime_ma_days, min_periods=1).sum()
+                       >= regime_ma_days * 0.75).astype(int).values
+        signal = np.where(bull_regime == 1, 1, signal)
 
     bt = test_df[["close", "forward_ret"]].copy()
     bt["signal"]      = signal
@@ -1551,7 +1559,7 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
 
     # Right: Correlation heatmap of key features
     ax_cm = axes[1]
-    key_features = ["close", "rsi", "ma20_vs_ma200_ratio", "macd", "bb_pct",
+    key_features = ["close", "rsi", "ma9_vs_ma21_bull", "macd", "bb_pct",
                     "roll_std7", "gtrends", "gtrends_3d_vs_7d_sma", "fed_rate", "sp500_ret1",
                     "ret_lag1"]
     key_features = [f for f in key_features if f in df.columns]
@@ -1638,9 +1646,10 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
     _have_eth_bt = backtests_eth is not None and len(backtests_eth) > 0
 
     n_panels = 2 if _have_eth_bt else 1
+    # Increased height per panel (9 instead of 8) and general figsize for better spacing
     fig7, axes7 = plt.subplots(
         n_panels, 1,
-        figsize=(18, 8 * n_panels),
+        figsize=(18, 9 * n_panels),
         facecolor=BG
     )
     if n_panels == 1:

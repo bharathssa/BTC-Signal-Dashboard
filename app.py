@@ -231,9 +231,6 @@ if st.session_state.get("pipeline_done"):
     features_btc  = st.session_state["features_btc"]
     features_eth  = st.session_state["features_eth"]
     metrics_btc   = st.session_state["metrics_btc"]
-    metrics_eth   = st.session_state["metrics_eth"]
-    backtests_btc = st.session_state["backtests_btc"]
-    prediction_btc= st.session_state["prediction_btc"]
     prediction_eth= st.session_state["prediction_eth"]
     lr_coef_df    = st.session_state["lr_coef_df"]
     lr_formula    = st.session_state["lr_formula"]
@@ -294,7 +291,8 @@ if st.session_state.get("pipeline_done"):
         for name, (inp_type, model) in models_btc.items():
             re_backtests_btc[f"BTC-{name}"] = btc.run_backtest(
                 model, scaler_btc, inp_type, test_btc[features_btc], test_btc,
-                proba_cutoff=btc_cutoff, name=f"BTC-{name}"
+                proba_cutoff=btc_cutoff, name=f"BTC-{name}",
+                regime_overlay=regime_overlay, regime_ma_days=regime_ma_days
             )
         bt_rf = re_backtests_btc.get("BTC-GradientBoosting", list(re_backtests_btc.values())[0])
 
@@ -303,7 +301,8 @@ if st.session_state.get("pipeline_done"):
         for name, (inp_type, model) in models_eth.items():
             re_backtests_eth[f"ETH-{name}"] = btc.run_backtest(
                 model, scaler_eth, inp_type, test_eth[features_eth], test_eth,
-                proba_cutoff=eth_cutoff, name=f"ETH-{name}"
+                proba_cutoff=eth_cutoff, name=f"ETH-{name}",
+                regime_overlay=regime_overlay, regime_ma_days=regime_ma_days
             )
 
         btc.plot_all(
@@ -423,147 +422,6 @@ if st.session_state.get("pipeline_done"):
     # ═══════════════════════════════════════════════════════════════
     # SECTION 3 — WHAT-IF HISTORY TABLE
     # ═══════════════════════════════════════════════════════════════
-    if show_whatif and len(custom_bt) > 0:
-        st.header("📆 What-If: Year-by-Year Performance")
-        _tsyear = st.session_state.get('test_start_year', bt_start.year)
-        st.caption(
-            f"How would ${capital_m}M have performed each calendar year using our strategy? "
-            f"Models trained on {_tsyear-2} and before, validated on {_tsyear-1}. "
-            f"Uses signal cutoffs ({btc_cutoff:.2f}/{eth_cutoff:.2f}) and current allocation weights."
-        )
-
-        first_year = max(2020, bt_end.year - 2)   # last 3 calendar years from end date
-        last_year  = bt_end.year
-        year_rows  = []
-        compound_value = CAPITAL   # tracks compounded portfolio value year by year
-
-        for yr in range(first_year, last_year + 1):
-            yr_start = str(date(yr, 1, 1))
-            yr_end   = str(min(date(yr, 12, 31), bt_end))
-
-            ybt = btc.run_portfolio_backtest_custom(
-                models_btc, scaler_btc, features_btc,
-                models_eth, scaler_eth, features_eth,
-                df_btc, df_eth,
-                start_date       = yr_start,
-                end_date         = yr_end,
-                alloc_full_btc   = full_btc_pct / 100,
-                alloc_full_eth   = full_eth_pct / 100,
-                alloc_btc_only   = btc_only_pct / 100,
-                alloc_eth_eth    = eth_pct / 100,
-                btc_cutoff       = btc_cutoff,
-                eth_cutoff       = eth_cutoff,
-                fee_rate         = fee_rate,
-                kill_pct         = kill_pct,
-                regime_overlay   = regime_overlay,
-                regime_ma_days   = regime_ma_days,
-            )
-            if len(ybt) == 0:
-                continue
-
-            yr_ret   = ybt.attrs["strat_return"]
-            yr_btc   = ybt.attrs["btc_bnh"]
-            yr_eth   = ybt.attrs["eth_bnh"]
-            yr_sh    = ybt.attrs["sharpe"]
-            yr_dd    = ybt.attrs["max_dd"]
-            yr_final = compound_value * (1 + yr_ret)
-            alpha_y  = yr_ret - yr_btc
-
-            # Count actual trading days available (some years may be partial)
-            days_in_period = len(ybt)
-
-            year_rows.append({
-                "Year":           yr,
-                "Period":         f"{yr_start} → {yr_end}",
-                "Strategy":       f"{yr_ret:+.1%}",
-                "BTC B&H":        f"{yr_btc:+.1%}",
-                "ETH B&H":        f"{yr_eth:+.1%}",
-                "Alpha":          f"{alpha_y:+.1%}",
-                "Sharpe":         f"{yr_sh:.2f}",
-                "Max DD":         f"{yr_dd:.1%}",
-                "Days":           days_in_period,
-                "Start Value":    f"${compound_value/1e6:.2f}M",
-                "End Value":      f"${yr_final/1e6:.2f}M",
-                # raw for coloring
-                "_ret":           yr_ret,
-                "_alpha":         alpha_y,
-                "_sharpe":        yr_sh,
-            })
-            compound_value = yr_final   # compound into next year
-
-        if year_rows:
-            # Summary row (full period)
-            total_ret_all = compound_value / CAPITAL - 1
-            summary_row = {
-                "Year":       "📊 TOTAL",
-                "Period":     f"{bt_start} → {bt_end}",
-                "Strategy":   f"{total_ret_all:+.1%}",
-                "BTC B&H":    "",
-                "ETH B&H":    "",
-                "Alpha":      "",
-                "Sharpe":     "",
-                "Max DD":     "",
-                "Days":       sum(r["Days"] for r in year_rows),
-                "Start Value": f"${CAPITAL/1e6:.2f}M",
-                "End Value":  f"${compound_value/1e6:.2f}M",
-                "_ret":       total_ret_all,
-                "_alpha":     0,
-                "_sharpe":    0,
-            }
-            all_rows = year_rows + [summary_row]
-
-            display_cols = ["Year", "Period", "Strategy", "BTC B&H", "ETH B&H",
-                            "Alpha", "Sharpe", "Max DD", "Days", "Start Value", "End Value"]
-            df_whatif = pd.DataFrame(all_rows)[display_cols]
-
-            # Style the table
-            def color_strategy(val):
-                try:
-                    v = float(val.replace("%","").replace("+",""))
-                    return f"color: {'#2ecc71' if v >= 0 else '#e74c3c'}; font-weight: 700"
-                except Exception:
-                    return ""
-
-            def color_alpha(val):
-                try:
-                    v = float(val.replace("%","").replace("+",""))
-                    return f"color: {'#2ecc71' if v >= 0 else '#e74c3c'}"
-                except Exception:
-                    return ""
-
-            styled = (
-                df_whatif.style
-                .applymap(color_strategy, subset=["Strategy"])
-                .applymap(color_alpha,    subset=["Alpha"])
-                .set_properties(**{"text-align": "center"})
-                .set_table_styles([
-                    {"selector": "th", "props": [("background-color", "#1e3a5f"),
-                                                  ("color", "#f39c12"),
-                                                  ("font-weight", "700"),
-                                                  ("text-align", "center")]},
-                    {"selector": "tr:last-child td",
-                     "props": [("background-color", "#1e3a5f"),
-                                ("color", "#ffffff"),
-                                ("font-weight", "800"),
-                                ("border-top", "2px solid #f39c12")]},
-                ])
-            )
-            st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            # Highlight the compounded result
-            delta_emoji = "🚀" if compound_value > CAPITAL else "📉"
-            st.success(
-                f"{delta_emoji} **Compounded Result:** ${capital_m}M invested at **{bt_start}** "
-                f"→ **${compound_value/1e6:.2f}M** by **{bt_end}** "
-                f"({total_ret_all:+.1%} total return)"
-            )
-        else:
-            st.warning("No data available for the selected date range.")
-        st.divider()
-
-    # ═══════════════════════════════════════════════════════════════
-    # SECTION 4 — TODAY'S PRICES
-    # ═══════════════════════════════════════════════════════════════
     st.header("💲 Current Prices")
     p1, p2 = st.columns(2)
     p1.metric("Bitcoin (BTC)", f"${prediction_btc['close']:,.2f}", f"{prediction_btc['today_ret']:+.2%} on {prediction_btc['date']}")
@@ -581,8 +439,8 @@ if st.session_state.get("pipeline_done"):
     st.caption(f"BTC Cutoff: {btc_cutoff:.0%} | ETH Cutoff: {eth_cutoff:.0%} | Kill Switch: -{kill_pct_val}% daily stop")
 
     # ── Cumulative Return — Per-Model comparison (BTC | ETH) ─────────────
-    st.subheader("📈 Cumulative Return: All Models vs Buy & Hold (BTC ● ETH)")
-    st.caption("Left panel: each BTC model vs BTC Buy&Hold. Right panel: each ETH model vs ETH Buy&Hold. 🏆 = best return model.")
+    st.subheader("📈 Cumulative Return: All Models vs Buy & Hold (BTC & ETH)")
+    st.caption("Top panel: each BTC model vs BTC Buy&Hold. Bottom panel: each ETH model vs ETH Buy&Hold. 🏆 = best return model.")
     p7 = "plot7_cumulative_returns.png"
     if os.path.exists(p7):
         st.image(p7, use_container_width=True)
