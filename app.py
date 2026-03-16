@@ -40,100 +40,102 @@ with st.sidebar:
     st.title("⚙️ Strategy Controls")
     st.caption("Adjust parameters to explore what-if scenarios. Models re-use pre-trained weights — only the backtest reruns.")
 
-    st.markdown("<div class='sidebar-header'>📅 Backtest Window</div>", unsafe_allow_html=True)
-    bt_start = st.date_input(
-        "Start Date",
-        value=date(2025, 1, 1),
-        min_value=date(2020, 1, 1),
-        max_value=date(2026, 2, 28),
-        help="Backtest evaluation start. Models are always trained on 2020–2023 data regardless of this setting.",
-    )
-    bt_end = st.date_input(
-        "End Date",
-        value=date(2025, 12, 31),
-        min_value=date(2020, 1, 2),
-        max_value=date(2026, 2, 28),
-        help="Backtest evaluation end date. Default is full year 2025.",
-    )
-
-    st.divider()
-    st.markdown("<div class='sidebar-header'>🎯 Signal Probability Cutoffs</div>", unsafe_allow_html=True)
-
-    # Show pipeline recommended cutoff as a hint if available
-    _rec_btc = st.session_state.get("best_btc_cutoff", None)
-    _rec_eth = st.session_state.get("best_eth_cutoff", None)
-    _btc_default = _rec_btc if _rec_btc is not None else 0.55
-    _eth_default = _rec_eth if _rec_eth is not None else 0.63
-
-    if _rec_btc is not None:
-        st.caption(f"✅ **Recommended by model (2024 val):** BTC = {_rec_btc:.2f} | ETH = {_rec_eth:.2f}")
-
-    btc_cutoff = st.slider(
-        "BTC Buy Threshold",
-        min_value=0.20, max_value=0.75, value=_btc_default, step=0.01,
-        format="%.2f",
-        help=f"Minimum probability for a BTC buy signal. Model-recommended: {_btc_default:.2f} (auto-tuned on 2024 validation).",
-    )
-    eth_cutoff = st.slider(
-        "ETH Buy Threshold",
-        min_value=0.20, max_value=0.75, value=_eth_default, step=0.01,
-        format="%.2f",
-        help=f"Minimum probability for an ETH buy signal. Model-recommended: {_eth_default:.2f} (auto-tuned on 2024 validation).",
-    )
-
-    st.divider()
-    st.markdown("<div class='sidebar-header'>⚖️ Allocation per Portfolio State</div>", unsafe_allow_html=True)
-    st.caption("**State: Full Risk-On** (BTC signal=✅ AND ETH signal=✅)")
-    full_btc_pct = st.slider("BTC %", 0, 100, 70, 5, key="full_btc",
-                              help="BTC allocation when both signals are bullish. ETH fills the rest.")
-    full_eth_pct = st.slider("ETH %", 0, 100 - full_btc_pct, min(30, 100 - full_btc_pct), 5, key="full_eth",
-                              help="ETH allocation when both signals are bullish.")
-    full_usdt_pct = 100 - full_btc_pct - full_eth_pct
-    st.caption(f"↳ USDT (safe-haven): **{full_usdt_pct}%**")
-
-    st.markdown("---")
-    st.caption("**State: BTC Only** (BTC=✅, ETH=⚪)")
-    btc_only_pct = st.slider("BTC % (BTC-only state)", 50, 100, 100, 5, key="btc_only",
-                              help="BTC allocation when only BTC signal is active. Remainder goes to USDT.")
-    btc_only_usdt = 100 - btc_only_pct
-    st.caption(f"↳ USDT: **{btc_only_usdt}%**")
-
-    st.markdown("---")
-    st.caption("**State: ETH Partial** (BTC=⚪, ETH=✅)")
-    eth_pct = st.slider("ETH % (ETH-partial state)", 0, 100, 60, 5, key="eth_partial",
-                         help="ETH allocation when only ETH signal fires. Remainder = USDT hedge.")
-    eth_usdt = 100 - eth_pct
-    st.caption(f"↳ USDT hedge: **{eth_usdt}%**")
-
-    st.markdown("---")
-    st.caption("**State: Defensive** (BTC=⚪, ETH=⚪) → 100% USDT (fixed)")
-
-    st.divider()
-    st.markdown("<div class='sidebar-header'>💰 Portfolio & Risk Settings</div>", unsafe_allow_html=True)
-    capital_m = st.slider(
-        "Starting Capital ($M)", 1, 200, 50, 1,
-        help="Portfolio starting value in USD millions.",
-    )
-    CAPITAL = capital_m * 1_000_000
-
-    fee_bps = st.slider(
-        "Transaction Fee (bps)", 0, 50, 10, 1,
-        help="Fee charged on each trade (each side). 10 bps = 0.10% ≈ Binance rate.",
-    )
-    fee_rate = fee_bps / 10_000
-
-    kill_pct_val = st.slider(
-        "Kill-Switch Threshold (%)", 1, 15, 5, 1,
-        help="If daily loss exceeds this %, force exit to USDT next day.",
-    )
-    kill_pct = kill_pct_val / 100
-
-    st.divider()
-    st.markdown("<div class='sidebar-header'>📊 What-If Table</div>", unsafe_allow_html=True)
-    show_whatif = st.checkbox("Show Year-by-Year History Table", value=True,
-                               help="Compute performance for each calendar year from 2020 to end date.")
-
+    with st.form("sidebar_settings"):
+        st.markdown("<div class='sidebar-header'>📅 Backtest Window</div>", unsafe_allow_html=True)
+        bt_start = st.date_input(
+            "Start Date",
+            value=date(2025, 1, 1),
+            min_value=date(2020, 1, 1),
+            max_value=date(2026, 2, 28),
+            help="Backtest evaluation start. Models are always trained on 2020–2023 data regardless of this setting.",
+        )
+        bt_end = st.date_input(
+            "End Date",
+            value=date(2025, 12, 31),
+            min_value=date(2020, 1, 2),
+            max_value=date(2026, 2, 28),
+            help="Backtest evaluation end date. Default is full year 2025.",
+        )
+    
+        st.divider()
+        st.markdown("<div class='sidebar-header'>🎯 Signal Probability Cutoffs</div>", unsafe_allow_html=True)
+    
+        # Show pipeline recommended cutoff as a hint if available
+        _rec_btc = st.session_state.get("best_btc_cutoff", None)
+        _rec_eth = st.session_state.get("best_eth_cutoff", None)
+        _btc_default = _rec_btc if _rec_btc is not None else 0.55
+        _eth_default = _rec_eth if _rec_eth is not None else 0.63
+    
+        if _rec_btc is not None:
+            st.caption(f"✅ **Recommended by model (2024 val):** BTC = {_rec_btc:.2f} | ETH = {_rec_eth:.2f}")
+    
+        btc_cutoff = st.slider(
+            "BTC Buy Threshold",
+            min_value=0.20, max_value=0.75, value=_btc_default, step=0.01,
+            format="%.2f",
+            help=f"Minimum probability for a BTC buy signal. Model-recommended: {_btc_default:.2f} (auto-tuned on 2024 validation).",
+        )
+        eth_cutoff = st.slider(
+            "ETH Buy Threshold",
+            min_value=0.20, max_value=0.75, value=_eth_default, step=0.01,
+            format="%.2f",
+            help=f"Minimum probability for an ETH buy signal. Model-recommended: {_eth_default:.2f} (auto-tuned on 2024 validation).",
+        )
+    
+        st.divider()
+        st.markdown("<div class='sidebar-header'>⚖️ Allocation per Portfolio State</div>", unsafe_allow_html=True)
+        st.caption("**State: Full Risk-On** (BTC signal=✅ AND ETH signal=✅)")
+        full_btc_pct = st.slider("BTC %", 0, 100, 70, 5, key="full_btc",
+                                  help="BTC allocation when both signals are bullish. ETH fills the rest.")
+        full_eth_pct = st.slider("ETH %", 0, 100 - full_btc_pct, min(30, 100 - full_btc_pct), 5, key="full_eth",
+                                  help="ETH allocation when both signals are bullish.")
+        full_usdt_pct = 100 - full_btc_pct - full_eth_pct
+        st.caption(f"↳ USDT (safe-haven): **{full_usdt_pct}%**")
+    
+        st.markdown("---")
+        st.caption("**State: BTC Only** (BTC=✅, ETH=⚪)")
+        btc_only_pct = st.slider("BTC % (BTC-only state)", 50, 100, 100, 5, key="btc_only",
+                                  help="BTC allocation when only BTC signal is active. Remainder goes to USDT.")
+        btc_only_usdt = 100 - btc_only_pct
+        st.caption(f"↳ USDT: **{btc_only_usdt}%**")
+    
+        st.markdown("---")
+        st.caption("**State: ETH Partial** (BTC=⚪, ETH=✅)")
+        eth_pct = st.slider("ETH % (ETH-partial state)", 0, 100, 60, 5, key="eth_partial",
+                             help="ETH allocation when only ETH signal fires. Remainder = USDT hedge.")
+        eth_usdt = 100 - eth_pct
+        st.caption(f"↳ USDT hedge: **{eth_usdt}%**")
+    
+        st.markdown("---")
+        st.caption("**State: Defensive** (BTC=⚪, ETH=⚪) → 100% USDT (fixed)")
+    
+        st.divider()
+        st.markdown("<div class='sidebar-header'>💰 Portfolio & Risk Settings</div>", unsafe_allow_html=True)
+        capital_m = st.slider(
+            "Starting Capital ($M)", 1, 200, 50, 1,
+            help="Portfolio starting value in USD millions.",
+        )
+        CAPITAL = capital_m * 1_000_000
+    
+        fee_bps = st.slider(
+            "Transaction Fee (bps)", 0, 50, 10, 1,
+            help="Fee charged on each trade (each side). 10 bps = 0.10% ≈ Binance rate.",
+        )
+        fee_rate = fee_bps / 10_000
+    
+        kill_pct_val = st.slider(
+            "Kill-Switch Threshold (%)", 1, 15, 5, 1,
+            help="If daily loss exceeds this %, force exit to USDT next day.",
+        )
+        kill_pct = kill_pct_val / 100
+    
+        st.divider()
+        st.markdown("<div class='sidebar-header'>📊 What-If Table</div>", unsafe_allow_html=True)
+        show_whatif = st.checkbox("Show Year-by-Year History Table", value=True,
+                                   help="Compute performance for each calendar year from 2020 to end date.")
+    
 # ══════════════════════════════════════════════════════════════════════════════
+        submitted = st.form_submit_button("Update Dashboard", use_container_width=True)
 # PIPELINE BUTTON — cache the heavy ML training; backtest reruns via sidebar
 # ══════════════════════════════════════════════════════════════════════════════
 _FEATURE_HASH = str(sorted(btc.CORE_FEATURES))   # cache key: changes when feature set changes
