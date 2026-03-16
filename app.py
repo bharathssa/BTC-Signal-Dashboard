@@ -155,9 +155,18 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 _FEATURE_HASH = str(sorted(btc.CORE_FEATURES))   # cache key: changes when feature set changes
 
+import os
+import joblib
+
 @st.cache_data(show_spinner=False, ttl=86400)
 def _run_cached_pipeline(_feature_hash, _test_start_year: int):
     """Trains models and returns all artefacts. Cache is keyed to feature set AND test year."""
+    if _test_start_year == 2025 and os.path.exists("pipeline_cache.pkl"):
+        try:
+            return joblib.load("pipeline_cache.pkl")
+        except Exception as e:
+            st.error(f"Failed to load cache: {e}. Retraining...")
+    
     # Derive the test_start string from the year: always start at Jan 1st of the test year.
     test_start = f"{_test_start_year}-01-01"
     return btc.main(test_start=test_start)
