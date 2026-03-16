@@ -85,15 +85,6 @@ python btc_signal_pipeline.py
 ```bash
 streamlit run app.py
 ```
-
----
-
-## 🌐 Streamlit Cloud vs Localhost Discrepancies
-If you deploy this repository to Streamlit Community Cloud, you may notice slight differences in exact metric outputs compared to running `app.py` locally. This is strictly expected behavior due to:
-
-1. **Live Data Fetching ( `.gitignore`):** The repository does not push the `*.csv` cache files to GitHub. Therefore, the Cloud Server pulls historically dynamic real-time data from Yahoo Finance/FRED at the exact moment of its own execution, rather than relying on your local frozen CSV cache.
-2. **C++ Dependencies:** High-performance libraries like XGBoost and LightGBM require underlying OS-level C++ bindings (like `libomp`) which are not typically available in lightweight Streamlit Cloud containers. The pipeline gracefully catches these missing dependencies and **automatically falls back to Gradient Boosting and Random Forest** on the Cloud dashboard, whereas your Localhost runs the full 5-model ensemble.
-
 ---
 
 ## 🖼️ Architecture Visuals
