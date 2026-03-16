@@ -318,8 +318,8 @@ if st.session_state.get("pipeline_done"):
         # Use the best model by ROC-AUC (from freshly computed metrics) for next-day prediction
         _btc_test_m = metrics_btc[metrics_btc["Split"] == "Test"]
         _eth_test_m = metrics_eth[metrics_eth["Split"] == "Test"]
-        gb_btc_name = _btc_test_m.sort_values("ROC_AUC", ascending=False).iloc[0]["Model"] if len(_btc_test_m) else "GradientBoosting"
-        gb_eth_name = _eth_test_m.sort_values("ROC_AUC", ascending=False).iloc[0]["Model"] if len(_eth_test_m) else "GradientBoosting"
+        gb_btc_name = _btc_test_m.sort_values("F1", ascending=False).iloc[0]["Model"] if len(_btc_test_m) else "GradientBoosting"
+        gb_eth_name = _eth_test_m.sort_values("F1", ascending=False).iloc[0]["Model"] if len(_eth_test_m) else "GradientBoosting"
         # Fallback to GradientBoosting if best model isn't in models dict
         if gb_btc_name not in models_btc:
             gb_btc_name = "GradientBoosting" if "GradientBoosting" in models_btc else list(models_btc.keys())[0]
@@ -371,17 +371,17 @@ if st.session_state.get("pipeline_done"):
     st.header(f"💰 ${capital_m}M Portfolio — Backtest Results ({period_label})")
     st.caption(f"Blended daily returns from BTC + ETH based on model signals. {fee_bps}bps fee per trade. {kill_pct_val}% kill-switch active.")
 
-    st.markdown("### 🏆 Top Performing Models (Selected by ROC-AUC)")
+    st.markdown("### 🏆 Top Performing Models (Selected by F1 Score)")
     m1, m2 = st.columns(2)
-    # Dynamically pick best model by highest Test ROC-AUC from current metrics
+    # Dynamically pick best model by highest Test F1 Score from current metrics
     _btc_test = metrics_btc[metrics_btc["Split"] == "Test"]
     _eth_test = metrics_eth[metrics_eth["Split"] == "Test"]
-    best_btc_model_name = _btc_test.sort_values("ROC_AUC", ascending=False).iloc[0]["Model"] if len(_btc_test) else "GradientBoosting"
-    best_eth_model_name = _eth_test.sort_values("ROC_AUC", ascending=False).iloc[0]["Model"] if len(_eth_test) else "GradientBoosting"
-    _btc_auc = _btc_test.sort_values("ROC_AUC", ascending=False).iloc[0]["ROC_AUC"] if len(_btc_test) else 0
-    _eth_auc = _eth_test.sort_values("ROC_AUC", ascending=False).iloc[0]["ROC_AUC"] if len(_eth_test) else 0
-    m1.metric("🧠 Best BTC Model", best_btc_model_name, f"ROC-AUC = {_btc_auc:.3f}")
-    m2.metric("🧠 Best ETH Model", best_eth_model_name, f"ROC-AUC = {_eth_auc:.3f}")
+    best_btc_model_name = _btc_test.sort_values("F1", ascending=False).iloc[0]["Model"] if len(_btc_test) else "GradientBoosting"
+    best_eth_model_name = _eth_test.sort_values("F1", ascending=False).iloc[0]["Model"] if len(_eth_test) else "GradientBoosting"
+    _btc_f1 = _btc_test.sort_values("F1", ascending=False).iloc[0]["F1"] if len(_btc_test) else 0
+    _eth_f1 = _eth_test.sort_values("F1", ascending=False).iloc[0]["F1"] if len(_eth_test) else 0
+    m1.metric("🧠 Best BTC Model", best_btc_model_name, f"F1 Score = {_btc_f1:.3f}")
+    m2.metric("🧠 Best ETH Model", best_eth_model_name, f"F1 Score = {_eth_f1:.3f}")
     st.markdown("<br>", unsafe_allow_html=True)
 
     k1, k2, k3, k4 = st.columns(4)

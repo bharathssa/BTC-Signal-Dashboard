@@ -1470,70 +1470,59 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
         save_cm_plot(backtests_eth, "ETH", "eth_confusion_matrices")
         print("[Plot] 3B/5 — ETH Confusion Matrices saved")
 
-    # ── PLOT 4: Backtest Cumulative Returns ───────────────────────────────
-    fig = plt.figure(figsize=(16, 10), facecolor=BG)
-    gs4 = gridspec.GridSpec(2, 2, hspace=0.35, wspace=0.3)
+    # ── PLOT 4: Backtest Cumulative Returns (BTC & ETH) ───────────────────────
+    def save_cumulative_return_plot(bt_dict, asset_name, main_df, out_dir):
+        fig = plt.figure(figsize=(16, 10), facecolor=BG)
+        gs4 = gridspec.GridSpec(2, 2, hspace=0.35, wspace=0.3)
+        model_colors = [CYAN, ORNG, GREEN, PURPLE, GOLD]
+        
+        ax_main = fig.add_subplot(gs4[0, :])
+        ax_main.set_facecolor(BG)
+        ax_main.set_title(f"Cumulative Returns — All {asset_name} Models vs Buy&Hold", color=TEXT, fontsize=11, fontweight="bold")
+        
+        for (name, bt), color in zip(bt_dict.items(), model_colors):
+            ax_main.plot(bt.index, bt["cum_strategy"], color=color, lw=1.5, label=f"{name} ({bt.attrs['strat_return']:+.1%})")
+            
+        first_bt = list(bt_dict.values())[0]
+        ax_main.plot(first_bt.index, first_bt["cum_bnh"], color=RED, lw=2.0, ls="--", label=f"Buy&Hold ({first_bt.attrs['bnh_return']:+.1%})")
+        ax_main.axhline(1.0, color=TEXT, lw=0.7, alpha=0.4)
+        ax_main.set_ylabel("Cumulative Return (×1)", fontsize=9)
+        ax_main.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}x"))
+        ax_main.legend(fontsize=8, ncol=3)
+        ax_main.grid(True, alpha=0.3)
+        
+        best_bt = bt_dict.get(f"{asset_name}-GradientBoosting", first_bt)
+        
+        ax_b = fig.add_subplot(gs4[1, 0])
+        ax_b.set_facecolor(BG)
+        ax_b.set_title(f"Best Model Signals on {asset_name} Price", color=TEXT, fontsize=10)
+        ax_b.plot(best_bt.index, main_df.loc[best_bt.index, "close"] / 1000, color="#90a4ae", lw=0.9, alpha=0.8, label=f"{asset_name} Close")
+        buy_days = best_bt[best_bt["signal"] == 1]
+        ax_b.scatter(buy_days.index, main_df.loc[buy_days.index, "close"] / 1000 * 1.02, marker="^", color=GREEN, s=30, zorder=5, alpha=0.7, label="Buy Signal")
+        ax_b.set_ylabel("Price ($k)", fontsize=9)
+        ax_b.legend(fontsize=8)
+        ax_b.grid(True, alpha=0.3)
+        
+        ax_c = fig.add_subplot(gs4[1, 1])
+        ax_c.set_facecolor(BG)
+        ax_c.set_title(f"Best Model Strategy Monthly Returns", color=TEXT, fontsize=10)
+        monthly = best_bt["net_ret"].resample("ME").apply(lambda x: (1+x).prod()-1)
+        monthly_df = pd.DataFrame({"Year": monthly.index.year, "Month": monthly.index.month, "Return": monthly.values})
+        pivot = monthly_df.pivot(index="Year", columns="Month", values="Return")
+        pivot.columns = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][:len(pivot.columns)]
+        sns.heatmap(pivot, annot=True, fmt=".0%", cmap="RdYlGn", center=0, ax=ax_c, mask=pivot.isna(), cbar=False, linewidths=0.5, annot_kws={"size": 7})
+        ax_c.set_xlabel("")
+        ax_c.set_ylabel("")
+        
+        plt.savefig(f"{out_dir}/plot4_backtest_{asset_name.lower()}.png", dpi=130, bbox_inches="tight", facecolor=BG)
+        plt.close()
 
-    model_colors = [CYAN, ORNG, GREEN, PURPLE, GOLD]
+    save_cumulative_return_plot(backtests, "BTC", df, output_dir)
+    print("[Plot] 4/5 — BTC Backtest saved")
+    if backtests_eth:
+        save_cumulative_return_plot(backtests_eth, "ETH", df_eth, output_dir)
+        print("[Plot] 4B/5 — ETH Backtest saved")
 
-    # Panel A: All models cumulative return
-    ax_main = fig.add_subplot(gs4[0, :])
-    ax_main.set_facecolor(BG)
-    ax_main.set_title("Cumulative Returns — All Models vs Buy&Hold",
-                       color=TEXT, fontsize=11, fontweight="bold")
-
-    for (name, bt), color in zip(backtests.items(), model_colors):
-        ax_main.plot(bt.index, bt["cum_strategy"],
-                     color=color, lw=1.5, label=f"{name} ({bt.attrs['strat_return']:+.1%})")
-
-    # BnH from first backtest
-    first_bt = list(backtests.values())[0]
-    ax_main.plot(first_bt.index, first_bt["cum_bnh"],
-                 color=RED, lw=2.0, ls="--", label=f"Buy&Hold ({first_bt.attrs['bnh_return']:+.1%})")
-    ax_main.axhline(1.0, color=TEXT, lw=0.7, alpha=0.4)
-    ax_main.set_ylabel("Cumulative Return (×1)", fontsize=9)
-    ax_main.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}x"))
-    ax_main.legend(fontsize=8, ncol=3)
-    ax_main.grid(True, alpha=0.3)
-
-    # Panel B: RF signal heatmap + buy markers
-    ax_b = fig.add_subplot(gs4[1, 0])
-    ax_b.set_facecolor(BG)
-    ax_b.set_title("RF Signals on BTC Price", color=TEXT, fontsize=10)
-    ax_b.plot(bt_rf.index, df.loc[bt_rf.index, "close"] / 1000,
-              color="#90a4ae", lw=0.9, alpha=0.8, label="BTC Close")
-    buy_days = bt_rf[bt_rf["signal"] == 1]
-    ax_b.scatter(buy_days.index,
-                 df.loc[buy_days.index, "close"] / 1000 * 1.02,
-                 marker="^", color=GREEN, s=30, zorder=5, alpha=0.7, label="Buy Signal")
-    ax_b.set_ylabel("Price ($k)", fontsize=9)
-    ax_b.legend(fontsize=8)
-    ax_b.grid(True, alpha=0.3)
-
-    # Panel C: Monthly returns heatmap (RF strategy)
-    ax_c = fig.add_subplot(gs4[1, 1])
-    ax_c.set_facecolor(BG)
-    ax_c.set_title("RF Strategy Monthly Returns", color=TEXT, fontsize=10)
-    monthly = bt_rf["net_ret"].resample("ME").apply(lambda x: (1+x).prod()-1)
-    monthly_df = pd.DataFrame({
-        "Year":  monthly.index.year,
-        "Month": monthly.index.month,
-        "Return": monthly.values
-    })
-    pivot = monthly_df.pivot(index="Year", columns="Month", values="Return")
-    pivot.columns = ["Jan","Feb","Mar","Apr","May","Jun",
-                     "Jul","Aug","Sep","Oct","Nov","Dec"][:len(pivot.columns)]
-    mask = pivot.isna()
-    sns.heatmap(pivot, annot=True, fmt=".0%", cmap="RdYlGn",
-                center=0, ax=ax_c, mask=mask, cbar=False,
-                linewidths=0.5, annot_kws={"size": 7})
-    ax_c.set_xlabel("")
-    ax_c.set_ylabel("")
-
-    plt.savefig(f"{output_dir}/plot4_backtest.png",
-                dpi=130, bbox_inches="tight", facecolor=BG)
-    plt.close()
-    print("[Plot] 4/5 — Backtest saved")
 
     # ── PLOT 5: Feature Importance + Correlation Heatmap ─────────────────
     fig, axes = plt.subplots(1, 2, figsize=(16, 8), facecolor=BG)
