@@ -484,7 +484,7 @@ if st.session_state.get("pipeline_done"):
     st.subheader("🧪 Visual Model Diagnostics")
     for p in ["plot2_model_evaluation.png",
               "plot3_confusion_matrices.png",
-              "plot3b_eth_confusion_matrices.png",
+              "plot3_eth_confusion_matrices.png",
               "plot4_backtest.png", "plot5_features.png"]:
         if os.path.exists(p):
             st.image(p, use_container_width=True)

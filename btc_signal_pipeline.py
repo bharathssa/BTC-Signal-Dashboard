@@ -731,12 +731,8 @@ def find_optimal_cutoff(
     """
     # Pick best tree model
     model_name = None
-    for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest", "XGBoost", "LightGBM"]:
-        if preferred in models:
-            model_name = preferred
-            break
-    if model_name is None:
-        model_name = list(models.keys())[0]
+    # Because the dictionary is pre-sorted by F1 score in main(), element 0 is automatically the best model
+    model_name = list(models.keys())[0]
 
     inp_type, model = models[model_name]
     X_val = val_df[features]
@@ -984,13 +980,7 @@ def run_portfolio_backtest(models_btc, scaler_btc, features_btc,
     """
     # Pick best tree-based model for each asset (by ROC-AUC)
     def _get_best_signal(models, scaler, X_test, cutoff):
-        """Return probability and binary signal using the given cutoff."""
-        for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest"]:
-            if preferred in models:
-                inp_type, model = models[preferred]
-                X = scaler.transform(X_test) if inp_type == "scaled" else X_test
-                proba = model.predict_proba(X)[:, 1]
-                return proba, (proba >= cutoff).astype(int)
+        """Return probability and binary signal from the highest F1 model (first in sorted dict)."""
         inp_type, model = list(models.items())[0][1]
         X = scaler.transform(X_test) if inp_type == "scaled" else X_test
         proba = model.predict_proba(X)[:, 1]
@@ -1115,12 +1105,6 @@ def run_portfolio_backtest_custom(
     """
     # ── Helper: pick best model and generate signal ───────────────────────────
     def _get_best_signal(models, scaler, X, cutoff):
-        for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest"]:
-            if preferred in models:
-                inp_type, model = models[preferred]
-                Xp = scaler.transform(X) if inp_type == "scaled" else X
-                proba = model.predict_proba(Xp)[:, 1]
-                return proba, (proba >= cutoff).astype(int)
         inp_type, model = list(models.items())[0][1]
         Xp = scaler.transform(X) if inp_type == "scaled" else X
         proba = model.predict_proba(Xp)[:, 1]
@@ -1796,6 +1780,19 @@ def main(test_start: str = "2025-01-01"):
                                   features_eth)
 
     # ── STEP 6: Individual Asset Backtests (for comparison) ──────────────────
+    
+    # Sort models by Validation F1 Score descending so the pipeline defaults to the mathematically best model
+    def _sort_by_f1(models_dict, metrics_df):
+        try:
+            val_f1 = metrics_df[metrics_df["Split"] == "Validation"].set_index("Model")["F1"]
+            sorted_names = val_f1.sort_values(ascending=False).index.tolist()
+            return {name: models_dict[name] for name in sorted_names if name in models_dict}
+        except Exception:
+            return models_dict
+
+    models_btc = _sort_by_f1(models_btc, metrics_btc)
+    models_eth = _sort_by_f1(models_eth, metrics_eth)
+
     print("\n── STEP 6: Individual Backtests (for comparison) ────────────────────")
     backtests_btc = {}
     for name, (inp_type, model) in models_btc.items():
