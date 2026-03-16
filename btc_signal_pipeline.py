@@ -724,9 +724,8 @@ def find_optimal_cutoff(
 ) -> float:
     """
     Sweep probability cutoffs on the validation set and select the one that
-    maximises *annualised Sharpe Ratio* of a simple long/cash backtest on the
-    validation window.  This ties the cutoff directly to trading performance
-    rather than just precision/recall balance.
+    maximises F1 Score while heavily penalising any mathematical gap between 
+    Precision and Recall to achieve a perfectly balanced ~50/50 model.
 
     Uses the best tree-based model (GradientBoosting > EnsembleVoter > RandomForest).
     """
@@ -771,13 +770,12 @@ def find_optimal_cutoff(
         
         bp = precision_score(y_val, signal, zero_division=0)
         br = recall_score(y_val, signal, zero_division=0)
+        f1 = f1_score(y_val, signal, zero_division=0)
         
-        # We want to encourage Recall > 40% and Precision > 55%
-        # We add a small artificial boost to the 'sharpe' score for sorting,
-        # so that cutoffs meeting these criteria are heavily preferred.
-        score = sharpe
-        if br >= 0.40: score += 1.0
-        if bp >= 0.55: score += 1.0
+        # User explicitly requested a balanced precision and recall.
+        # Maximize F1 (harmonic mean) while heavily penalizing imbalance gap.
+        gap = abs(bp - br)
+        score = f1 - (gap * 2.0)
         
         valid_cutoffs.append((cutoff, score, bp, br, sharpe))
 
