@@ -88,9 +88,9 @@ if not FRED_API_KEY:
 
 START_DATE      = "2020-01-01"
 END_DATE        = "2025-12-31"  # Full year 2025 data (test period)
-SIGNAL_THRESHOLD = 0.005         # 0.5% threshold: predict days with meaningful positive returns
-                                  # Changed from 0%: at 0% the model caught noisy +0.1% days,
-                                  # accumulated fees, and ended up negative. 0.5% = real buy signals.
+SIGNAL_THRESHOLD = 0.002         # 0.2% threshold: optimistic but covers trading fees (10bps x 2)
+                                  # Lowered from 0.5% to increase number of 'Buy' targets
+                                  # and boost model recall / trade frequency.
 PROBA_CUTOFF    = 0.55           # BTC signal probability cutoff
 ETH_PROBA_CUTOFF = 0.63          # ETH cutoff is HIGHER — filter out weak ETH signals
 OUTPUT_DIR      = "."            # where to save plots
@@ -695,8 +695,8 @@ def find_optimal_cutoff(
     scaler,
     features: list,
     val_df:   pd.DataFrame,
-    sweep_start: float = 0.45,
-    sweep_end:   float = 0.72,
+    sweep_start: float = 0.35,   # Expanded range down to 0.35 to allow finding true 50/50 balance
+    sweep_end:   float = 0.65,
     step:        float = 0.01,
 ) -> float:
     """

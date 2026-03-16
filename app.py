@@ -70,13 +70,13 @@ with st.sidebar:
 
     btc_cutoff = st.slider(
         "BTC Buy Threshold",
-        min_value=0.40, max_value=0.75, value=_btc_default, step=0.01,
+        min_value=0.30, max_value=0.75, value=_btc_default, step=0.01,
         format="%.2f",
         help=f"Minimum probability for a BTC buy signal. Model-recommended: {_btc_default:.2f} (auto-tuned on 2024 validation).",
     )
     eth_cutoff = st.slider(
         "ETH Buy Threshold",
-        min_value=0.40, max_value=0.75, value=_eth_default, step=0.01,
+        min_value=0.30, max_value=0.75, value=_eth_default, step=0.01,
         format="%.2f",
         help=f"Minimum probability for an ETH buy signal. Model-recommended: {_eth_default:.2f} (auto-tuned on 2024 validation).",
     )
