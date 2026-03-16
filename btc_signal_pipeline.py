@@ -752,9 +752,11 @@ def find_optimal_cutoff(
     best_cutoff  = 0.50
     cutoffs      = np.arange(sweep_start, sweep_end + step / 2, step)
     fee_rate_opt = 0.001   # 10 bps for optimisation
+    
+    valid_cutoffs = []
 
     for cutoff in cutoffs:
-        signal   = (proba >= cutoff).astype(float)
+        signal   = (proba >= cutoff).astype(int)
         buy_rate = signal.mean()
         if buy_rate < 0.03 or buy_rate > 0.95:
             continue
@@ -766,13 +768,27 @@ def find_optimal_cutoff(
         if std_ret < 1e-8:
             continue
         sharpe = net_ret.mean() / std_ret * np.sqrt(252)
+        
+        bp = precision_score(y_val, signal, zero_division=0)
+        br = recall_score(y_val, signal, zero_division=0)
+        
+        # We want to encourage Recall > 40% and Precision > 55%
+        # We add a small artificial boost to the 'sharpe' score for sorting,
+        # so that cutoffs meeting these criteria are heavily preferred.
+        score = sharpe
+        if br >= 0.40: score += 1.0
+        if bp >= 0.55: score += 1.0
+        
+        valid_cutoffs.append((cutoff, score, bp, br, sharpe))
 
-        if sharpe > best_sharpe:
-            best_sharpe = sharpe
-            best_cutoff = cutoff
+    if valid_cutoffs:
+        valid_cutoffs.sort(key=lambda x: x[1], reverse=True)
+        best_cutoff, _, bp, br, best_sharpe = valid_cutoffs[0]
+    else:
+        # Fallback if loop failed completely
+        best_cutoff = 0.50
+        bp, br, best_sharpe = 0, 0, 0
 
-    bp = precision_score(y_val, (proba >= best_cutoff).astype(int), zero_division=0)
-    br = recall_score(y_val,    (proba >= best_cutoff).astype(int), zero_division=0)
     print(f"[Cutoff] {model_name} Sharpe-optimal cutoff = {best_cutoff:.2f}  "
           f"(P: {bp:.2f}, R: {br:.2f}, val Sharpe: {best_sharpe:.3f})")
     return round(float(best_cutoff), 2)
@@ -1662,15 +1678,19 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
                       color=TEXT, fontsize=14, fontweight="bold")
 
         strat_ret = portfolio_bt.attrs.get("strat_return", 0)
-        bnh_ret   = portfolio_bt.attrs.get("btc_bnh", 0)  # using custom bnh reference from attrs
+        btc_bnh   = portfolio_bt.attrs.get("btc_bnh", 0)
+        eth_bnh   = portfolio_bt.attrs.get("eth_bnh", 0)
+        bnh_ret   = (btc_bnh + eth_bnh) / 2  # Simple 50/50 return for benchmark label
 
         # Plot Strategy
-        ax7.plot(portfolio_bt.index, portfolio_bt["cum_strat"],
+        ax7.plot(portfolio_bt.index, portfolio_bt["cum_portfolio"],
                  color=CYAN, lw=2.5, label=f"Portfolio Strategy ({strat_ret:+.1%})")
 
-        # Plot Blended B&H
-        ax7.plot(portfolio_bt.index, portfolio_bt["cum_bht"],
-                 color=RED, lw=2.0, ls="--", label=f"Blended Buy&Hold ({bnh_ret:+.1%})")
+        # Plot Blended B&H (50% BTC + 50% ETH daily returns compounded)
+        daily_blended_bnh = (portfolio_bt["ret_btc"] * 0.5 + portfolio_bt["ret_eth"] * 0.5)
+        cum_blended_bnh = (1 + daily_blended_bnh.fillna(0)).cumprod()
+        ax7.plot(portfolio_bt.index, cum_blended_bnh,
+                 color=RED, lw=2.0, ls="--", label=f"Blended 50/50 Buy&Hold ({bnh_ret:+.1%})")
 
         ax7.axhline(1.0, color=TEXT, lw=0.6, alpha=0.35, ls=":")
         ax7.set_ylabel("Cumulative Return (×1)", fontsize=10)
@@ -1876,4 +1896,6 @@ def main(test_start: str = "2025-01-01"):
 if __name__ == "__main__":
     (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
      metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
-     prediction_btc, prediction_eth, lr_coef_df, lr_formula) = main()
+     prediction_btc, prediction_eth, lr_coef_df, lr_formula,
+     best_btc_cutoff, best_eth_cutoff,
+     backtests_eth) = main()
