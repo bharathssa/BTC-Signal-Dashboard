@@ -51,16 +51,16 @@ from sklearn.calibration        import CalibratedClassifierCV
 try:
     import xgboost as xgb
     HAS_XGB = True
-except ImportError:
+except Exception as e:
     HAS_XGB = False
-    print("XGBoost not installed — skipping. Run: pip install xgboost")
+    print(f"XGBoost Exception: {e}")
 
 try:
     import lightgbm as lgb
     HAS_LGB = True
-except ImportError:
+except Exception as e:
     HAS_LGB = False
-    print("LightGBM not installed — skipping. Run: pip install lightgbm")
+    print(f"LightGBM Exception: {e}")
 
 # Neural Network from sklearn (no TF dependency needed)
 from sklearn.neural_network import MLPClassifier
