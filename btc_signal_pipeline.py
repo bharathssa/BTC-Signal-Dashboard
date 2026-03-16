@@ -1277,9 +1277,9 @@ def predict_next_day(model, scaler, inp_type,
 # SECTION 12 — Plotting
 # ─────────────────────────────────────────────────────────────────────────────
 def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
-             df_eth=None, portfolio_bt=None, output_dir=".", proba_cutoff=PROBA_CUTOFF,
-             backtests_eth=None, features_eth=None, models_eth=None,
-             scaler_eth_ref=None, test_df_eth_ref=None):
+             df_eth=None, portfolio_bt=None, output_dir=".",
+             proba_cutoff=0.50, backtests_eth=None, features_eth=None, models_eth=None,
+             scaler_eth_ref=None, test_df_eth_ref=None, eth_proba_cutoff=0.50):
     """Generate all visualisation plots and save to files."""
 
     BG      = "#0d1117"
@@ -1428,32 +1428,43 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
     print("[Plot] 2/5 — Model Evaluation saved")
 
     # ── PLOT 3: Confusion Matrices ────────────────────────────────────────
-    n_models = len(backtests)
-    fig, axes = plt.subplots(1, n_models, figsize=(5 * n_models, 5), facecolor=BG)
-    fig.suptitle("Confusion Matrices — Test Set",
-                 color=TEXT, fontsize=13, fontweight="bold")
-    if n_models == 1:
-        axes = [axes]
+    def save_cm_plot(bt_dict, title_prefix, filename_suffix):
+        if not bt_dict: return
+        n_models = len(bt_dict)
+        fig_cm, axes_cm = plt.subplots(1, n_models, figsize=(5 * n_models, 5), facecolor=BG)
+        fig_cm.suptitle(f"{title_prefix} Confusion Matrices — Test Set",
+                        color=TEXT, fontsize=13, fontweight="bold")
+        if n_models == 1:
+            axes_cm = [axes_cm]
 
-    cmap = sns.light_palette("#2E75B6", as_cmap=True)
-    for ax, (name, bt) in zip(axes, backtests.items()):
-        preds = (bt["proba"] >= proba_cutoff).astype(int)
-        actual = (bt["forward_ret"] > SIGNAL_THRESHOLD).astype(int)
-        cm = confusion_matrix(actual, preds)
-        sns.heatmap(cm, annot=True, fmt="d", cmap=cmap, ax=ax,
-                    xticklabels=["Hold(0)", "Buy(1)"],
-                    yticklabels=["Hold(0)", "Buy(1)"],
-                    cbar=False, linewidths=0.5)
-        ax.set_title(name, color=TEXT, fontsize=10)
-        ax.set_xlabel("Predicted", color=TEXT)
-        ax.set_ylabel("Actual", color=TEXT)
-        ax.set_facecolor(BG)
+        cmap = sns.light_palette("#2E75B6", as_cmap=True)
+        for ax, (name, bt) in zip(axes_cm, bt_dict.items()):
+            # Use appropriate proba cutoff (assuming 'eth' in title or name means ETH cutoff)
+            cutoff = eth_proba_cutoff if "ETH" in title_prefix.upper() else proba_cutoff
+            probs = bt.get("proba", pd.Series([0]*len(bt)))
+            preds = (probs >= cutoff).astype(int)
+            actual = (bt.get("forward_ret", bt["net_ret"]) > SIGNAL_THRESHOLD).astype(int)
+            cm = confusion_matrix(actual, preds)
+            sns.heatmap(cm, annot=True, fmt="d", cmap=cmap, ax=ax,
+                        xticklabels=["Hold(0)", "Buy(1)"],
+                        yticklabels=["Hold(0)", "Buy(1)"],
+                        cbar=False, linewidths=0.5)
+            ax.set_title(name, color=TEXT, fontsize=10)
+            ax.set_xlabel("Predicted", color=TEXT)
+            ax.set_ylabel("Actual", color=TEXT)
+            ax.set_facecolor(BG)
 
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/plot3_confusion_matrices.png",
-                dpi=130, bbox_inches="tight", facecolor=BG)
-    plt.close()
-    print("[Plot] 3/5 — Confusion Matrices saved")
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/plot3_{filename_suffix}.png",
+                    dpi=130, bbox_inches="tight", facecolor=BG)
+        plt.close()
+
+    save_cm_plot(backtests, "BTC", "confusion_matrices")
+    print("[Plot] 3/5 — BTC Confusion Matrices saved")
+    
+    if backtests_eth:
+        save_cm_plot(backtests_eth, "ETH", "eth_confusion_matrices")
+        print("[Plot] 3B/5 — ETH Confusion Matrices saved")
 
     # ── PLOT 4: Backtest Cumulative Returns ───────────────────────────────
     fig = plt.figure(figsize=(16, 10), facecolor=BG)
@@ -1642,86 +1653,39 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
         plt.close()
         print("[Plot] 6/7 — ETH Technicals saved")
 
-    # ── PLOT 7: BTC Models vs B&H  |  ETH Models vs B&H (STACKED VERTICALLY) ──
-    _have_eth_bt = backtests_eth is not None and len(backtests_eth) > 0
+    # ── PLOT 7: PORTFOLIO RETURN vs BLENDED BUY & HOLD ──
+    fig7, ax7 = plt.subplots(figsize=(14, 7), facecolor=BG)
+    ax7.set_facecolor(BG)
 
-    n_panels = 2 if _have_eth_bt else 1
-    # Increased height per panel (9 instead of 8) and general figsize for better spacing
-    fig7, axes7 = plt.subplots(
-        n_panels, 1,
-        figsize=(18, 9 * n_panels),
-        facecolor=BG
-    )
-    if n_panels == 1:
-        axes7 = [axes7]   # make iterable
+    if portfolio_bt is not None and len(portfolio_bt) > 0:
+        ax7.set_title("Cumulative Returns — Custom Portfolio Strategy vs Blended Buy&Hold",
+                      color=TEXT, fontsize=14, fontweight="bold")
 
-    fig7.suptitle("Cumulative Returns — All Models vs Buy\u0026Hold (Test Period)",
-                  color=TEXT, fontsize=14, fontweight="bold", y=1.01)
+        strat_ret = portfolio_bt.attrs.get("strat_return", 0)
+        bnh_ret   = portfolio_bt.attrs.get("btc_bnh", 0)  # using custom bnh reference from attrs
 
-    model_colors_7 = [CYAN, ORNG, GREEN, PURPLE, GOLD, "#ef9a9a", "#80cbc4"]
+        # Plot Strategy
+        ax7.plot(portfolio_bt.index, portfolio_bt["cum_strat"],
+                 color=CYAN, lw=2.5, label=f"Portfolio Strategy ({strat_ret:+.1%})")
 
-    # ── Panel 1: BTC models ──
-    ax_btc = axes7[0]
-    ax_btc.set_facecolor(BG)
-    ax_btc.set_title("₿ BTC — Each Model vs BTC Buy\u0026Hold",
-                     color=TEXT, fontsize=12, fontweight="bold")
+        # Plot Blended B&H
+        ax7.plot(portfolio_bt.index, portfolio_bt["cum_bht"],
+                 color=RED, lw=2.0, ls="--", label=f"Blended Buy&Hold ({bnh_ret:+.1%})")
 
-    # Find best BTC model by highest cumulative return
-    best_btc_name = max(backtests.keys(), key=lambda n: backtests[n].attrs["strat_return"])
-
-    for (name, bt), color in zip(backtests.items(), model_colors_7):
-        is_best = (name == best_btc_name)
-        lw = 2.5 if is_best else 1.2
-        label_txt = f"{'🏆 ' if is_best else ''}{'BTC-' if not name.startswith('BTC-') else ''}{name} ({bt.attrs['strat_return']:+.1%})"
-        ax_btc.plot(bt.index, bt["cum_strategy"],
-                    color=color, lw=lw, label=label_txt,
-                    zorder=5 if is_best else 2)
-
-    # BTC B&H benchmark
-    first_bt_btc = list(backtests.values())[0]
-    ax_btc.plot(first_bt_btc.index, first_bt_btc["cum_bnh"],
-                color=RED, lw=2.0, ls="--",
-                label=f"BTC Buy\u0026Hold ({first_bt_btc.attrs['bnh_return']:+.1%})")
-    ax_btc.axhline(1.0, color=TEXT, lw=0.6, alpha=0.35, ls=":")
-    ax_btc.set_ylabel("Cumulative Return (×1)", fontsize=10)
-    ax_btc.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}\u00d7"))
-    ax_btc.set_xlabel("Date", fontsize=9)
-    ax_btc.legend(fontsize=8, loc="upper left")
-    ax_btc.grid(True, alpha=0.3)
-
-    # ── Panel 2: ETH models (if available) ──
-    if _have_eth_bt:
-        ax_eth = axes7[1]
-        ax_eth.set_facecolor(BG)
-        ax_eth.set_title("Ξ ETH — Each Model vs ETH Buy\u0026Hold",
-                         color=TEXT, fontsize=12, fontweight="bold")
-
-        best_eth_name = max(backtests_eth.keys(), key=lambda n: backtests_eth[n].attrs["strat_return"])
-
-        for (name, bt_e), color in zip(backtests_eth.items(), model_colors_7):
-            is_best = (name == best_eth_name)
-            lw = 2.5 if is_best else 1.2
-            label_txt = f"{'🏆 ' if is_best else ''}{name} ({bt_e.attrs['strat_return']:+.1%})"
-            ax_eth.plot(bt_e.index, bt_e["cum_strategy"],
-                        color=color, lw=lw, label=label_txt,
-                        zorder=5 if is_best else 2)
-
-        first_bt_eth = list(backtests_eth.values())[0]
-        ax_eth.plot(first_bt_eth.index, first_bt_eth["cum_bnh"],
-                    color="#ce93d8", lw=2.0, ls="--",
-                    label=f"ETH Buy\u0026Hold ({first_bt_eth.attrs['bnh_return']:+.1%})")
-        ax_eth.axhline(1.0, color=TEXT, lw=0.6, alpha=0.35, ls=":")
-        ax_eth.set_ylabel("Cumulative Return (×1)", fontsize=10)
-        ax_eth.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}\u00d7"))
-        ax_eth.set_xlabel("Date", fontsize=9)
-        ax_eth.legend(fontsize=8, loc="upper left")
-        ax_eth.grid(True, alpha=0.3)
+        ax7.axhline(1.0, color=TEXT, lw=0.6, alpha=0.35, ls=":")
+        ax7.set_ylabel("Cumulative Return (×1)", fontsize=10)
+        ax7.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}\u00d7"))
+        ax7.set_xlabel("Date", fontsize=9)
+        ax7.legend(fontsize=10, loc="upper left")
+        ax7.grid(True, alpha=0.3)
+    else:
+        ax7.text(0.5, 0.5, "No Portfolio Data", color=TEXT, ha="center", va="center")
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/plot7_cumulative_returns.png",
                 dpi=130, bbox_inches="tight", facecolor=BG)
     plt.close()
-    print("[Plot] 7/7 — Cumulative Returns (dual-panel) saved")
+    print("[Plot] 7/7 — Cumulative Returns (Portfolio) saved")
 
     total_plots = 7 if (df_eth is not None) else 5
     print(f"\n[Plots] All {total_plots} charts saved to: {os.path.abspath(output_dir)}/")

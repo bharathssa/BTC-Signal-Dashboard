@@ -443,8 +443,9 @@ if st.session_state.get("pipeline_done"):
     st.caption(f"BTC Cutoff: {btc_cutoff:.0%} | ETH Cutoff: {eth_cutoff:.0%} | Kill Switch: -{kill_pct_val}% daily stop")
 
     # ── Cumulative Return — Per-Model comparison (BTC | ETH) ─────────────
-    st.subheader("📈 Cumulative Return: All Models vs Buy & Hold (BTC & ETH)")
-    st.caption("Top panel: each BTC model vs BTC Buy&Hold. Bottom panel: each ETH model vs ETH Buy&Hold. 🏆 = best return model.")
+    # ── Cumulative Return — Portfolio Strategy vs Blended Buy&Hold ─────────────
+    st.subheader("📈 Custom Portfolio Performance")
+    st.caption("Displays the cumulative return of the 4-state portfolio vs a blended 50/50 Buy&Hold.")
     p7 = "plot7_cumulative_returns.png"
     if os.path.exists(p7):
         st.image(p7, use_container_width=True)
@@ -471,9 +472,19 @@ if st.session_state.get("pipeline_done"):
 
     st.divider()
 
-    # ── Remaining charts ─────────────────────────────────────────────────
-    st.subheader("🧪 Model Diagnostics")
-    for p in ["plot2_model_evaluation.png", "plot3_confusion_matrices.png",
+    # ── Model Diagnostics ─────────────────────────────────────────────────
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("### ₿ BTC Test Metrics")
+        st.dataframe(metrics_btc[metrics_btc["Split"] == "Test"].drop(columns=["Split"]), hide_index=True)
+    with c2:
+        st.markdown("### Ξ ETH Test Metrics")
+        st.dataframe(metrics_eth[metrics_eth["Split"] == "Test"].drop(columns=["Split"]), hide_index=True)
+
+    st.subheader("🧪 Visual Model Diagnostics")
+    for p in ["plot2_model_evaluation.png",
+              "plot3_confusion_matrices.png",
+              "plot3b_eth_confusion_matrices.png",
               "plot4_backtest.png", "plot5_features.png"]:
         if os.path.exists(p):
             st.image(p, use_container_width=True)
