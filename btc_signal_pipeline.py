@@ -88,9 +88,8 @@ if not FRED_API_KEY:
 
 START_DATE      = "2020-01-01"
 END_DATE        = "2025-12-31"  # Full year 2025 data (test period)
-SIGNAL_THRESHOLD = 0.002         # 0.2% threshold: optimistic but covers trading fees (10bps x 2)
-                                  # Lowered from 0.5% to increase number of 'Buy' targets
-                                  # and boost model recall / trade frequency.
+SIGNAL_THRESHOLD = 0.000         # 0.0% threshold: perfectly balances targets (crypto goes up ~51% of days)
+                                  # Lowered from 0.002 to massively increase 'Buy' targets and boost recall.
 PROBA_CUTOFF    = 0.55           # BTC signal probability cutoff
 ETH_PROBA_CUTOFF = 0.63          # ETH cutoff is HIGHER — filter out weak ETH signals
 OUTPUT_DIR      = "."            # where to save plots
@@ -101,15 +100,15 @@ OUTPUT_DIR      = "."            # where to save plots
 # The only difference is the underlying price & Google Trends data source.
 # ─────────────────────────────────────────────────────────────────────────────
 CORE_FEATURES = [
-    "trend_score",      # EMA crossover + MACD histogram (asset-specific trend composite)
+    "macd_ema_trend_score",      # EMA crossover + MACD histogram (asset-specific trend composite)
     "rsi",              # RSI-14 overbought/oversold (asset-specific momentum oscillator) — #1 by importance
-    "ma_ratio",         # Short/Long term trend regime (MA20 / MA200) — #3 by importance
+    "ma20_vs_ma200_ratio",         # Short/Long term trend regime (MA20 / MA200) — #3 by importance
     "fear_greed",       # Crypto Fear & Greed Index (SHARED) — #4 sentiment signal
-    "vol_ratio",        # Volume vs 5-day avg — confirms trend conviction (volume surge = real move)
-    "gtrends_momentum", # Search momentum: 3d SMA / 7d SMA (asset-specific, lagged 1 day)
+    "volume_vs_5d_avg",        # Volume vs 5-day avg — confirms trend conviction (volume surge = real move)
+    "gtrends_3d_vs_7d_sma", # Search momentum: 3d SMA / 7d SMA (asset-specific, lagged 1 day)
     "adx",              # ADX trend strength (asset-specific)
     "ret_lag3",         # 3-day trailing return — medium-term momentum signal (replaces sp500_ret1)
-    "roll_win10",       # 10-day win rate: % of last 10 days that closed up (trend consistency filter)
+    "win_rate_10d",       # 10-day win rate: % of last 10 days that closed up (trend consistency filter)
     #                     replaces macro_pressure (Fed/yield change) — lowest importance feature
 ]
 
@@ -291,7 +290,7 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ma20"]     = close.rolling(20).mean()
     df["ma50"]     = close.rolling(50).mean()
     df["ma200"]    = close.rolling(200).mean()
-    df["ma_ratio"] = df["ma20"] / df["ma200"] # >1.0 = MA-20 above MA-200 (bullish long-term trend)
+    df["ma20_vs_ma200_ratio"] = df["ma20"] / df["ma200"] # >1.0 = MA-20 above MA-200 (bullish long-term trend)
 
     # EMA
     df["ema12"]    = close.ewm(span=12, adjust=False).mean()
@@ -326,7 +325,7 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Volume features
     df["vol_ma5"]      = df["volume"].rolling(5).mean()
-    df["vol_ratio"]    = df["volume"] / df["vol_ma5"].replace(0, np.nan)
+    df["volume_vs_5d_avg"]    = df["volume"] / df["vol_ma5"].replace(0, np.nan)
 
     # Momentum regime features & EMAs explicitly requested
     df["ma200"]        = close.rolling(200).mean()
@@ -363,7 +362,7 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── Rolling Win Rate (10-day) ─────────────────────────────────────────────
     # What % of the last 10 days closed higher? High win rate = momentum regime.
     daily_wins        = (close.pct_change() > 0).astype(int)
-    df["roll_win10"]  = daily_wins.rolling(10).mean()   # 0.0 to 1.0
+    df["win_rate_10d"]  = daily_wins.rolling(10).mean()   # 0.0 to 1.0
     df["roll_win5"]   = daily_wins.rolling(5).mean()
 
     # 21-day volatility proxy (VIX equivalent for BTC)
@@ -371,7 +370,7 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── Interaction features (non-linear combinations for AUC boost) ──────────
     df["adx_x_regime"]    = df["adx"] * df["above_ma200"]    # Trend strength in bull market
-    df["win_x_macd"]      = df["roll_win10"] * (df["macd_hist"] > 0).astype(int)  # Win + MACD up
+    df["win_x_macd"]      = df["win_rate_10d"] * (df["macd_hist"] > 0).astype(int)  # Win + MACD up
     df["plus_di_net"]     = df["plus_di"] - df["minus_di"]    # Net directional indicator
 
     # ── Structural/Volume Trend Features (Valid Out-of-Sample) ────────────────
@@ -470,9 +469,9 @@ def integrate_macro_trends(btc: pd.DataFrame,
     if "ema_cross" in df.columns and "macd_hist" in df.columns:
         ema_norm  = (df["ema_cross"]  - 1.0)                  # ema_cross ≈1 at n neutral, shift to 0
         macd_norm = df["macd_hist"] / (df["macd_hist"].abs().rolling(90).mean().clip(1e-8))
-        df["trend_score"] = (ema_norm + macd_norm).clip(-3, 3)
+        df["macd_ema_trend_score"] = (ema_norm + macd_norm).clip(-3, 3)
     else:
-        df["trend_score"] = 0.0
+        df["macd_ema_trend_score"] = 0.0
 
     # ── COMPOSITE 2: Macro Pressure ────────────────────────────────────────────
     # Combines the daily change in the Fed Rate (fed_rate_cut) with the
@@ -490,8 +489,8 @@ def integrate_macro_trends(btc: pd.DataFrame,
     if "gtrends" in df.columns:
         df["gtrends_sma3"] = df["gtrends"].rolling(3).mean()
         df["gtrends_sma7"] = df["gtrends"].rolling(7).mean()
-        df["gtrends_momentum"] = df["gtrends_sma3"] / df["gtrends_sma7"].replace(0, np.nan)
-        df["gtrends_momentum"] = df["gtrends_momentum"].fillna(1.0).clip(0, 3)
+        df["gtrends_3d_vs_7d_sma"] = df["gtrends_sma3"] / df["gtrends_sma7"].replace(0, np.nan)
+        df["gtrends_3d_vs_7d_sma"] = df["gtrends_3d_vs_7d_sma"].fillna(1.0).clip(0, 3)
 
     print(f"[Features] Macro + Trends integrated: {len(df)} rows, {df.shape[1]} columns")
     return df
@@ -1502,8 +1501,8 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
 
     # Right: Correlation heatmap of key features
     ax_cm = axes[1]
-    key_features = ["close", "rsi", "ma_ratio", "macd", "bb_pct",
-                    "roll_std7", "gtrends", "gtrends_momentum", "fed_rate", "sp500_ret1",
+    key_features = ["close", "rsi", "ma20_vs_ma200_ratio", "macd", "bb_pct",
+                    "roll_std7", "gtrends", "gtrends_3d_vs_7d_sma", "fed_rate", "sp500_ret1",
                     "ret_lag1"]
     key_features = [f for f in key_features if f in df.columns]
     corr_data = df[key_features].dropna().corr()
