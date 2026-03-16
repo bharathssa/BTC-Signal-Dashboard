@@ -107,9 +107,11 @@ CORE_FEATURES = [
     "volume_vs_5d_avg",        # Volume vs 5-day avg — confirms trend conviction (volume surge = real move)
     "gtrends_3d_vs_7d_sma", # Search momentum: 3d SMA / 7d SMA (asset-specific, lagged 1 day)
     "adx",              # ADX trend strength (asset-specific)
-    "ret_lag3",         # 3-day trailing return — medium-term momentum signal (replaces sp500_ret1)
-    "win_rate_10d",       # 10-day win rate: % of last 10 days that closed up (trend consistency filter)
-    #                     replaces macro_pressure (Fed/yield change) — lowest importance feature
+    "ret_lag3",         # 3-day trailing return — medium-term momentum signal
+    "win_rate_10d",     # 10-day win rate: % of last 10 days that closed up (trend consistency filter)
+    "fed_rate_cut",     # US Federal Reserve interest rate daily changes (Macro policy filter)
+    "bond_yield_cut",   # 10-Year Treasury Yield daily changes (Macro pressure)
+    "sp500_ret1",       # S&P 500 daily return (US Equity market correlation)
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
