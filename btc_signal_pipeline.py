@@ -288,10 +288,13 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Moving averages
     df["ma5"]      = close.rolling(5).mean()
+    df["ma9"]      = close.rolling(9).mean()   # Fast regime MA
     df["ma20"]     = close.rolling(20).mean()
+    df["ma21"]     = close.rolling(21).mean()  # Slow regime MA
     df["ma50"]     = close.rolling(50).mean()
     df["ma200"]    = close.rolling(200).mean()
-    df["ma20_vs_ma200_ratio"] = df["ma20"] / df["ma200"] # >1.0 = MA-20 above MA-200 (bullish long-term trend)
+    df["ma20_vs_ma200_ratio"] = df["ma20"] / df["ma200"]   # >1.0 = MA-20 above MA-200 (bullish long-term)
+    df["ma9_vs_ma21_bull"]    = (df["ma9"] > df["ma21"]).astype(int)  # 1 = MA9 crossed above MA21 (bull regime)
 
     # EMA
     df["ema12"]    = close.ewm(span=12, adjust=False).mean()
@@ -560,19 +563,34 @@ def select_features(X_train: pd.DataFrame,
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 7 — Time-Based Split (NO random splits — temporal order preserved)
 # ─────────────────────────────────────────────────────────────────────────────
-def time_split(df: pd.DataFrame):
+def time_split(df: pd.DataFrame, test_start: str = "2025-01-01"):
     """
-    Strict time-based split:
-      Training:   2020-2023  (Train on 4 years of data)
-      Validation: 2024       (Tune on 2024 bull market)
-      Test:       2025       (Out-of-sample on full 2025 data)
+    Dynamic time-based split — windows shift based on the selected test period:
+      Train:      everything before (test_year - 1)
+      Validation: the full year before test_year
+      Test:       test_year onwards
+
+    Examples:
+      test_start="2025-01-01" → Train 2020-2023, Val 2024, Test 2025
+      test_start="2024-01-01" → Train 2020-2022, Val 2023, Test 2024
+      test_start="2023-01-01" → Train 2020-2021, Val 2022, Test 2023
+
     Random splits would constitute look-ahead bias.
     """
     df = df.dropna()
 
-    train = df[df.index < "2024-01-01"]
-    val   = df[(df.index >= "2024-01-01") & (df.index < "2025-01-01")]
-    test  = df[df.index >= "2025-01-01"]
+    test_start_dt  = pd.Timestamp(test_start)
+    val_start_dt   = pd.Timestamp(f"{test_start_dt.year - 1}-01-01")
+
+    train = df[df.index < val_start_dt]
+    val   = df[(df.index >= val_start_dt) & (df.index < test_start_dt)]
+    test  = df[df.index >= test_start_dt]
+
+    if len(train) == 0 or len(val) == 0:
+        raise ValueError(
+            f"[Split] Not enough data for test_start={test_start}. "
+            f"Need at least 2 years of history before the test window."
+        )
 
     print(f"[Split] Train: {len(train)} ({train.index[0].date()}→{train.index[-1].date()})"
           f"  |  Val: {len(val)} ({val.index[0].date()}→{val.index[-1].date()})"
@@ -700,21 +718,19 @@ def find_optimal_cutoff(
     scaler,
     features: list,
     val_df:   pd.DataFrame,
-    sweep_start: float = 0.25,   # Expanded deeply down to 0.25 to unlock maximum trade optimism
-    sweep_end:   float = 0.65,
+    sweep_start: float = 0.25,
+    sweep_end:   float = 0.75,
     step:        float = 0.01,
 ) -> float:
     """
-    Sweep probability cutoffs on the validation set (2024) and select the one
-    that explicitly balances Precision and Recall (targeting ~50% for both, as requested).
-    Score = F1_Score - abs(Precision - Recall)
-    
-    This removes the guesswork from setting the sidebar slider default.
-    Uses the best tree model (GradientBoosting > EnsembleVoter > RandomForest).
-    """
-    from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
+    Sweep probability cutoffs on the validation set and select the one that
+    maximises *annualised Sharpe Ratio* of a simple long/cash backtest on the
+    validation window.  This ties the cutoff directly to trading performance
+    rather than just precision/recall balance.
 
-    # Pick best tree model for cutoff discovery
+    Uses the best tree-based model (GradientBoosting > EnsembleVoter > RandomForest).
+    """
+    # Pick best tree model
     model_name = None
     for preferred in ["GradientBoosting", "EnsembleVoter", "RandomForest", "XGBoost", "LightGBM"]:
         if preferred in models:
@@ -726,36 +742,39 @@ def find_optimal_cutoff(
     inp_type, model = models[model_name]
     X_val = val_df[features]
     y_val = val_df["target"]
+    daily_ret = val_df["forward_ret"] if "forward_ret" in val_df.columns else \
+                val_df["close"].pct_change().shift(-1).reindex(val_df.index)
 
-    Xp = scaler.transform(X_val) if inp_type == "scaled" else X_val
+    Xp    = scaler.transform(X_val) if inp_type == "scaled" else X_val
     proba = model.predict_proba(Xp)[:, 1]
-    auc   = roc_auc_score(y_val, proba) if len(y_val.unique()) > 1 else 0.5
 
-    best_score   = -np.inf
+    best_sharpe  = -np.inf
     best_cutoff  = 0.50
-    cutoffs = np.arange(sweep_start, sweep_end + step / 2, step)
+    cutoffs      = np.arange(sweep_start, sweep_end + step / 2, step)
+    fee_rate_opt = 0.001   # 10 bps for optimisation
 
     for cutoff in cutoffs:
-        y_pred = (proba >= cutoff).astype(int)
-        buy_rate = y_pred.mean()
-        if buy_rate < 0.05 or buy_rate > 0.90:   # ignore degenerate cutoffs
+        signal   = (proba >= cutoff).astype(float)
+        buy_rate = signal.mean()
+        if buy_rate < 0.03 or buy_rate > 0.95:
             continue
-        prec = precision_score(y_val, y_pred, zero_division=0)
-        rec  = recall_score(y_val, y_pred, zero_division=0)
-        f1   = f1_score(y_val, y_pred, zero_division=0)
-        
-        # Explicit objective: Balance Precision and Recall (target ~50% each)
-        imbalance_diff = abs(prec - rec)
-        score = f1 - (1.5 * imbalance_diff)  # Heavy penalty for unbalanced states
-        
-        if score > best_score:
-            best_score  = score
-            best_cutoff = cutoff
-            best_p = prec
-            best_r = rec
 
-    print(f"[Cutoff] {model_name} optimal cutoff = {best_cutoff:.2f}  "
-          f"(P: {best_p:.2f}, R: {best_r:.2f}, score: {best_score:.4f} on validation 2024)")
+        # Simple long/cash net return
+        trades   = pd.Series(signal).diff().abs().fillna(0)
+        net_ret  = signal * daily_ret.values - trades.values * fee_rate_opt
+        std_ret  = net_ret.std()
+        if std_ret < 1e-8:
+            continue
+        sharpe = net_ret.mean() / std_ret * np.sqrt(252)
+
+        if sharpe > best_sharpe:
+            best_sharpe = sharpe
+            best_cutoff = cutoff
+
+    bp = precision_score(y_val, (proba >= best_cutoff).astype(int), zero_division=0)
+    br = recall_score(y_val,    (proba >= best_cutoff).astype(int), zero_division=0)
+    print(f"[Cutoff] {model_name} Sharpe-optimal cutoff = {best_cutoff:.2f}  "
+          f"(P: {bp:.2f}, R: {br:.2f}, val Sharpe: {best_sharpe:.3f})")
     return round(float(best_cutoff), 2)
 
 
@@ -1058,6 +1077,12 @@ def run_portfolio_backtest_custom(
     # Cost params
     fee_rate:   float = 0.001,
     kill_pct:   float = 0.05,
+    # ── Bull Regime Trend-Following Overlay ──
+    # When an asset is in a confirmed bull trend (above MA200 for `regime_ma_days` days),
+    # the model signal is overridden to BUY, preventing USDT-defensive mode during bull runs.
+    # Disable with regime_overlay=False if you want pure ML signal only.
+    regime_overlay:  bool  = True,
+    regime_ma_days:  int   = 20,    # how many consecutive days above MA200 needed to confirm bull trend
 ) -> pd.DataFrame:
     """
     Fully parameterised version of run_portfolio_backtest().
@@ -1101,6 +1126,28 @@ def run_portfolio_backtest_custom(
 
     proba_btc, signal_btc = _get_best_signal(models_btc, scaler_btc, X_btc, btc_cutoff)
     proba_eth, signal_eth = _get_best_signal(models_eth, scaler_eth, X_eth, eth_cutoff)
+
+    # ── Bull Regime Overlay ───────────────────────────────────────────────────────
+    # Use MA9 > MA21 crossover as the bull regime signal.
+    # When the 9-day MA is above the 21-day MA, the asset is in a short-term bull trend
+    # and we override model Hold → Buy to avoid hiding in USDT during rallies.
+    if regime_overlay and "ma9_vs_ma21_bull" in btc_a.columns:
+        # Rolling sum: require the MA9>MA21 signal to hold for at least 75% of the window
+        btc_bull = (btc_a["ma9_vs_ma21_bull"].rolling(regime_ma_days, min_periods=1).sum()
+                    >= regime_ma_days * 0.75).astype(int).values
+        eth_bull = (eth_a["ma9_vs_ma21_bull"].rolling(regime_ma_days, min_periods=1).sum()
+                    >= regime_ma_days * 0.75).astype(int).values if "ma9_vs_ma21_bull" in eth_a.columns \
+                    else np.zeros(len(signal_eth), dtype=int)
+
+        override_btc = np.sum(btc_bull & (signal_btc == 0))
+        override_eth = np.sum(eth_bull & (signal_eth == 0))
+        if override_btc > 0:
+            print(f"[Regime] BTC bull overlay (MA9>MA21): overriding {override_btc} Hold→Buy days")
+        if override_eth > 0:
+            print(f"[Regime] ETH bull overlay (MA9>MA21): overriding {override_eth} Hold→Buy days")
+
+        signal_btc = np.where(btc_bull == 1, 1, signal_btc)
+        signal_eth = np.where(eth_bull == 1, 1, signal_eth)
 
     # ── Build custom allocation states ────────────────────────────────────────
     alloc_full_usdt = max(0.0, 1.0 - alloc_full_btc - alloc_full_eth)
@@ -1222,7 +1269,9 @@ def predict_next_day(model, scaler, inp_type,
 # SECTION 12 — Plotting
 # ─────────────────────────────────────────────────────────────────────────────
 def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
-             df_eth=None, portfolio_bt=None, output_dir=".", proba_cutoff=PROBA_CUTOFF):
+             df_eth=None, portfolio_bt=None, output_dir=".", proba_cutoff=PROBA_CUTOFF,
+             backtests_eth=None, features_eth=None, models_eth=None,
+             scaler_eth_ref=None, test_df_eth_ref=None):
     """Generate all visualisation plots and save to files."""
 
     BG      = "#0d1117"
@@ -1585,43 +1634,87 @@ def plot_all(df, metrics_df, backtests, bt_rf, imp_df, features, models,
         plt.close()
         print("[Plot] 6/7 — ETH Technicals saved")
 
-    # ── PLOT 7: Cumulative Return Comparison (Portfolio vs BTC vs ETH) ────
-    if portfolio_bt is not None:
-        fig7, ax7 = plt.subplots(figsize=(16, 8), facecolor=BG)
-        ax7.set_facecolor(BG)
-        fig7.suptitle("Cumulative Return — 4-State Portfolio vs BTC Buy&Hold vs ETH Buy&Hold (2025 Test Period)",
-                      color=TEXT, fontsize=13, fontweight="bold", y=1.01)
+    # ── PLOT 7: BTC Models vs B&H  |  ETH Models vs B&H (STACKED VERTICALLY) ──
+    _have_eth_bt = backtests_eth is not None and len(backtests_eth) > 0
 
-        port_ret = portfolio_bt.attrs["strat_return"]
-        btc_ret  = portfolio_bt.attrs["btc_bnh"]
-        eth_ret  = portfolio_bt.attrs["eth_bnh"]
+    n_panels = 2 if _have_eth_bt else 1
+    fig7, axes7 = plt.subplots(
+        n_panels, 1,
+        figsize=(18, 8 * n_panels),
+        facecolor=BG
+    )
+    if n_panels == 1:
+        axes7 = [axes7]   # make iterable
 
-        ax7.plot(portfolio_bt.index, portfolio_bt["cum_portfolio"],
-                 color=GOLD,   lw=2.5, label=f"🏆 4-State Portfolio  ({port_ret:+.1%})")
-        ax7.plot(portfolio_bt.index, portfolio_bt["cum_btc_bnh"],
-                 color=CYAN,   lw=1.8, ls="--", label=f"₿ BTC Buy & Hold  ({btc_ret:+.1%})")
-        ax7.plot(portfolio_bt.index, portfolio_bt["cum_eth_bnh"],
-                 color="#ce93d8", lw=1.8, ls="--", label=f"Ξ ETH Buy & Hold  ({eth_ret:+.1%})")
-        ax7.axhline(1.0, color=TEXT, lw=0.7, alpha=0.4, ls=":")
+    fig7.suptitle("Cumulative Returns — All Models vs Buy\u0026Hold (Test Period)",
+                  color=TEXT, fontsize=14, fontweight="bold", y=1.01)
 
-        # Shade USDT (defensive) periods
-        is_usdt = (portfolio_bt["w_btc"] == 0) & (portfolio_bt["w_eth"] == 0)
-        ax7.fill_between(portfolio_bt.index, ax7.get_ylim()[0], ax7.get_ylim()[1],
-                         where=is_usdt, color="#455a64", alpha=0.18, label="🛡️ USDT (Defensive)")
+    model_colors_7 = [CYAN, ORNG, GREEN, PURPLE, GOLD, "#ef9a9a", "#80cbc4"]
 
-        ax7.set_ylabel("Cumulative Return (×1 = starting capital)", fontsize=10)
-        ax7.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}×"))
-        ax7.set_xlabel("Date", fontsize=10)
-        ax7.legend(fontsize=10, loc="upper left")
-        ax7.grid(True, alpha=0.3)
+    # ── Panel 1: BTC models ──
+    ax_btc = axes7[0]
+    ax_btc.set_facecolor(BG)
+    ax_btc.set_title("₿ BTC — Each Model vs BTC Buy\u0026Hold",
+                     color=TEXT, fontsize=12, fontweight="bold")
 
-        plt.tight_layout()
-        plt.savefig(f"{output_dir}/plot7_cumulative_returns.png",
-                    dpi=130, bbox_inches="tight", facecolor=BG)
-        plt.close()
-        print("[Plot] 7/7 — Cumulative Returns saved")
+    # Find best BTC model by highest cumulative return
+    best_btc_name = max(backtests.keys(), key=lambda n: backtests[n].attrs["strat_return"])
 
-    total_plots = 7 if (df_eth is not None and portfolio_bt is not None) else 5
+    for (name, bt), color in zip(backtests.items(), model_colors_7):
+        is_best = (name == best_btc_name)
+        lw = 2.5 if is_best else 1.2
+        label_txt = f"{'🏆 ' if is_best else ''}{'BTC-' if not name.startswith('BTC-') else ''}{name} ({bt.attrs['strat_return']:+.1%})"
+        ax_btc.plot(bt.index, bt["cum_strategy"],
+                    color=color, lw=lw, label=label_txt,
+                    zorder=5 if is_best else 2)
+
+    # BTC B&H benchmark
+    first_bt_btc = list(backtests.values())[0]
+    ax_btc.plot(first_bt_btc.index, first_bt_btc["cum_bnh"],
+                color=RED, lw=2.0, ls="--",
+                label=f"BTC Buy\u0026Hold ({first_bt_btc.attrs['bnh_return']:+.1%})")
+    ax_btc.axhline(1.0, color=TEXT, lw=0.6, alpha=0.35, ls=":")
+    ax_btc.set_ylabel("Cumulative Return (×1)", fontsize=10)
+    ax_btc.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}\u00d7"))
+    ax_btc.set_xlabel("Date", fontsize=9)
+    ax_btc.legend(fontsize=8, loc="upper left")
+    ax_btc.grid(True, alpha=0.3)
+
+    # ── Panel 2: ETH models (if available) ──
+    if _have_eth_bt:
+        ax_eth = axes7[1]
+        ax_eth.set_facecolor(BG)
+        ax_eth.set_title("Ξ ETH — Each Model vs ETH Buy\u0026Hold",
+                         color=TEXT, fontsize=12, fontweight="bold")
+
+        best_eth_name = max(backtests_eth.keys(), key=lambda n: backtests_eth[n].attrs["strat_return"])
+
+        for (name, bt_e), color in zip(backtests_eth.items(), model_colors_7):
+            is_best = (name == best_eth_name)
+            lw = 2.5 if is_best else 1.2
+            label_txt = f"{'🏆 ' if is_best else ''}{name} ({bt_e.attrs['strat_return']:+.1%})"
+            ax_eth.plot(bt_e.index, bt_e["cum_strategy"],
+                        color=color, lw=lw, label=label_txt,
+                        zorder=5 if is_best else 2)
+
+        first_bt_eth = list(backtests_eth.values())[0]
+        ax_eth.plot(first_bt_eth.index, first_bt_eth["cum_bnh"],
+                    color="#ce93d8", lw=2.0, ls="--",
+                    label=f"ETH Buy\u0026Hold ({first_bt_eth.attrs['bnh_return']:+.1%})")
+        ax_eth.axhline(1.0, color=TEXT, lw=0.6, alpha=0.35, ls=":")
+        ax_eth.set_ylabel("Cumulative Return (×1)", fontsize=10)
+        ax_eth.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f}\u00d7"))
+        ax_eth.set_xlabel("Date", fontsize=9)
+        ax_eth.legend(fontsize=8, loc="upper left")
+        ax_eth.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/plot7_cumulative_returns.png",
+                dpi=130, bbox_inches="tight", facecolor=BG)
+    plt.close()
+    print("[Plot] 7/7 — Cumulative Returns (dual-panel) saved")
+
+    total_plots = 7 if (df_eth is not None) else 5
     print(f"\n[Plots] All {total_plots} charts saved to: {os.path.abspath(output_dir)}/")
 
 
@@ -1644,10 +1737,11 @@ def _build_asset_pipeline(ticker: str, keyword: str, macro, fgi, label: str):
     return df
 
 
-def main():
+def main(test_start: str = "2025-01-01"):
     print("\n" + "="*70)
     print("  AlphaQuest Capital — Multi-Asset Crypto Signal Pipeline")
     print("  BTC + ETH + USDT  |  4-State Portfolio Allocation")
+    print("  Dynamic Train/Val/Test split based on selected test window")
     print("="*70 + "\n")
 
     # ── STEP 1: ETL — Shared (macro + FGI) ──────────────────────────────────
@@ -1662,13 +1756,17 @@ def main():
     print("\n── STEP 2B: Feature Engineering — ETH ───────────────────────────────")
     df_eth = _build_asset_pipeline("ETH-USD", "ethereum", macro, fgi, "ETH")
 
+    test_year   = pd.Timestamp(test_start).year
+    val_year    = test_year - 1
+    print(f"  Dynamic split: Train ≤ {val_year-1}, Val = {val_year}, Test = {test_year}+")
+
     # ── STEP 3: Time-Based Split ──────────────────────────────────────────────
     print("\n── STEP 3: Time-Based Split ─────────────────────────────────────────")
     EXCLUDE = {"open", "high", "low", "close", "volume",
                "target", "forward_ret", "bb_upper", "bb_lower"}
 
     def _split_and_select(df):
-        train_df, val_df, test_df = time_split(df)
+        train_df, val_df, test_df = time_split(df, test_start=test_start)
         features = [c for c in df.columns if c not in EXCLUDE]
         X_tr, y_tr = train_df[features], train_df["target"]
         X_v,  y_v  = val_df[features],   val_df["target"]
@@ -1716,6 +1814,14 @@ def main():
 
     bt_rf = backtests_btc.get("BTC-GradientBoosting",
                                list(backtests_btc.values())[0])
+
+    # ── STEP 6B: ETH Model Backtests ─────────────────────────────────────────
+    print("\n── STEP 6B: Individual ETH Backtests ────────────────────────────────")
+    backtests_eth = {}
+    for name, (inp_type, model) in models_eth.items():
+        bt = run_backtest(model, scaler_eth, inp_type, X_test_eth, test_df_eth,
+                          proba_cutoff=ETH_PROBA_CUTOFF, name=f"ETH-{name}")
+        backtests_eth[f"ETH-{name}"] = bt
 
     # ── STEP 7: 4-State Portfolio Backtest ───────────────────────────────────
     print("\n── STEP 7: 4-State Portfolio Backtest (BTC+ETH+USDT) ────────────────")
@@ -1768,7 +1874,8 @@ def main():
     # ── STEP 9: Plots ─────────────────────────────────────────────────────────
     print("\n── STEP 9: Generate Plots ───────────────────────────────────────────")
     plot_all(df_btc, metrics_btc, backtests_btc, bt_rf, imp_btc, features_btc,
-             models_btc, df_eth=df_eth, portfolio_bt=portfolio_bt, output_dir=OUTPUT_DIR)
+             models_btc, df_eth=df_eth, portfolio_bt=portfolio_bt, output_dir=OUTPUT_DIR,
+             backtests_eth=backtests_eth)
 
     # ── FINAL SUMMARY ────────────────────────────────────────────────────────
     print("\n" + "="*70)
@@ -1789,7 +1896,8 @@ def main():
     return (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
             metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
             prediction_btc, prediction_eth, lr_coef_df, lr_formula,
-            best_btc_cutoff, best_eth_cutoff)
+            best_btc_cutoff, best_eth_cutoff,
+            backtests_eth)
 
 
 if __name__ == "__main__":

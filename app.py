@@ -128,6 +128,21 @@ with st.sidebar:
             help="If daily loss exceeds this %, force exit to USDT next day.",
         )
         kill_pct = kill_pct_val / 100
+
+        st.divider()
+        st.markdown("<div class='sidebar-header'>📈 Bull Regime Overlay</div>", unsafe_allow_html=True)
+        st.caption("When MA9 crosses above MA21, the asset is in a short-term bull trend. Hold signals are overridden to BUY, preventing USDT cash drag during rallies.")
+        regime_overlay = st.checkbox(
+            "✅ Enable Bull Regime Overlay (MA9 > MA21)", value=True,
+            help="If MA9 > MA21 for the asset, force a BUY signal regardless of model output. Faster and more reactive than MA200."
+        )
+        regime_ma_days = st.slider(
+            "Regime Confirmation Window (days)", 5, 60, 20, 5,
+            help="How many of the last N days must have MA9 > MA21 to count as a confirmed bull regime. Lower = more aggressive.",
+            disabled=not regime_overlay
+        )
+        if regime_overlay:
+            st.caption(f"💡 MA9>MA21 bull regime: model Hold → **forced BUY** ({regime_ma_days}-day window, 75% threshold)")
     
         st.divider()
         st.markdown("<div class='sidebar-header'>📊 What-If Table</div>", unsafe_allow_html=True)
@@ -140,11 +155,12 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 _FEATURE_HASH = str(sorted(btc.CORE_FEATURES))   # cache key: changes when feature set changes
 
-@st.cache_data(show_spinner=False, ttl=86400)   # 24 hours; also invalidates when CORE_FEATURES changes
-def _run_cached_pipeline(_feature_hash):
-    """Trains models and returns all artefacts. Cache is keyed to the current feature set."""
-
-    return btc.main()
+@st.cache_data(show_spinner=False, ttl=86400)
+def _run_cached_pipeline(_feature_hash, _test_start_year: int):
+    """Trains models and returns all artefacts. Cache is keyed to feature set AND test year."""
+    # Derive the test_start string from the year: always start at Jan 1st of the test year.
+    test_start = f"{_test_start_year}-01-01"
+    return btc.main(test_start=test_start)
 
 # ── Optional Cache Clear Button in Sidebar ──
 st.sidebar.divider()
@@ -158,10 +174,14 @@ if st.sidebar.button("🗑️ Clear Cache & Reload", help="Force the model to re
 if st.button("🚀 Run Full Pipeline", type="primary"):
     with st.spinner("Executing ETL → Feature Engineering → BTC + ETH Training → 4-State Portfolio Backtest… (data cached after first run)"):
         try:
-            (df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
+            # Derive test year from selected backtest start
+            _test_year = bt_start.year
+            (
+             df_btc, df_eth, models_btc, models_eth, scaler_btc, scaler_eth,
              metrics_btc, metrics_eth, backtests_btc, portfolio_bt,
              prediction_btc, prediction_eth, lr_coef_df, lr_formula,
-             best_btc_cutoff, best_eth_cutoff) = _run_cached_pipeline(_FEATURE_HASH)
+             best_btc_cutoff, best_eth_cutoff,
+             backtests_eth) = _run_cached_pipeline(_FEATURE_HASH, _test_year)
 
             # ── Store trained artefacts in session_state so sidebar can reuse them ──
             st.session_state["pipeline_done"]     = True
@@ -180,14 +200,17 @@ if st.button("🚀 Run Full Pipeline", type="primary"):
             st.session_state["metrics_btc"]       = metrics_btc
             st.session_state["metrics_eth"]       = metrics_eth
             st.session_state["backtests_btc"]     = backtests_btc
+            st.session_state["backtests_eth"]     = backtests_eth
             st.session_state["prediction_btc"]    = prediction_btc
             st.session_state["prediction_eth"]    = prediction_eth
             st.session_state["lr_coef_df"]        = lr_coef_df
             st.session_state["lr_formula"]        = lr_formula
             st.session_state["best_btc_cutoff"]   = best_btc_cutoff
             st.session_state["best_eth_cutoff"]   = best_eth_cutoff
+            st.session_state["test_start_year"]   = _test_year
 
-            st.success("✅ Pipeline executed successfully — BTC + ETH dual-model complete!")
+            st.success(f"✅ Pipeline executed successfully — BTC + ETH dual-model complete! "
+                       f"(Train ≤ {_test_year-2}, Val = {_test_year-1}, Test = {_test_year}+)")
 
         except Exception as e:
             import traceback
@@ -230,6 +253,8 @@ if st.session_state.get("pipeline_done"):
         eth_cutoff       = eth_cutoff,
         fee_rate         = fee_rate,
         kill_pct         = kill_pct,
+        regime_overlay   = regime_overlay,
+        regime_ma_days   = regime_ma_days,
     )
 
     strat_ret   = custom_bt.attrs["strat_return"]
@@ -244,10 +269,11 @@ if st.session_state.get("pipeline_done"):
     period_label = f"{bt_start.strftime('%d %b %Y')} → {bt_end.strftime('%d %b %Y')}"
 
     # ── Re-evaluate metrics and plots based on current cutoffs ───────────────
+    _test_start_str = f"{st.session_state.get('test_start_year', bt_start.year)}-01-01"
     with st.spinner("Updating metrics and charts for new cutoffs..."):
-        train_btc, val_btc, test_btc = btc.time_split(df_btc)
-        train_eth, val_eth, test_eth = btc.time_split(df_eth)
-        
+        train_btc, val_btc, test_btc = btc.time_split(df_btc, test_start=_test_start_str)
+        train_eth, val_eth, test_eth = btc.time_split(df_eth, test_start=_test_start_str)
+
         metrics_btc = btc.evaluate_models(
             models_btc, scaler_btc,
             train_btc[features_btc], train_btc["target"],
@@ -262,20 +288,28 @@ if st.session_state.get("pipeline_done"):
             test_eth[features_eth], test_eth["target"],
             features_eth, proba_cutoff=eth_cutoff
         )
-        
+
         # Re-run backtest for BTC to get bt_rf for plots, and update all backtests for CM plots
         re_backtests_btc = {}
         for name, (inp_type, model) in models_btc.items():
             re_backtests_btc[f"BTC-{name}"] = btc.run_backtest(
-                model, scaler_btc, inp_type, test_btc[features_btc], test_btc, proba_cutoff=btc_cutoff, name=f"BTC-{name}"
+                model, scaler_btc, inp_type, test_btc[features_btc], test_btc,
+                proba_cutoff=btc_cutoff, name=f"BTC-{name}"
             )
         bt_rf = re_backtests_btc.get("BTC-GradientBoosting", list(re_backtests_btc.values())[0])
-        
-        # We don't overwrite session_state here so it reruns efficiently next interaction
-        
+
+        # Re-run ETH per-model backtests with the current ETH cutoff
+        re_backtests_eth = {}
+        for name, (inp_type, model) in models_eth.items():
+            re_backtests_eth[f"ETH-{name}"] = btc.run_backtest(
+                model, scaler_eth, inp_type, test_eth[features_eth], test_eth,
+                proba_cutoff=eth_cutoff, name=f"ETH-{name}"
+            )
+
         btc.plot_all(
             df_btc, metrics_btc, re_backtests_btc, bt_rf, None, features_btc, models_btc,
-            df_eth=df_eth, portfolio_bt=custom_bt, output_dir=".", proba_cutoff=btc_cutoff
+            df_eth=df_eth, portfolio_bt=custom_bt, output_dir=".", proba_cutoff=btc_cutoff,
+            backtests_eth=re_backtests_eth
         )
 
         # Use the best model by ROC-AUC (from freshly computed metrics) for next-day prediction
@@ -391,9 +425,11 @@ if st.session_state.get("pipeline_done"):
     # ═══════════════════════════════════════════════════════════════
     if show_whatif and len(custom_bt) > 0:
         st.header("📆 What-If: Year-by-Year Performance")
+        _tsyear = st.session_state.get('test_start_year', bt_start.year)
         st.caption(
-            f"How would ${capital_m}M have performed each calendar year using our strategy with current slider settings? "
-            f"Uses the same trained models, signal cutoffs ({btc_cutoff:.2f}/{eth_cutoff:.2f}), and allocation weights as above."
+            f"How would ${capital_m}M have performed each calendar year using our strategy? "
+            f"Models trained on {_tsyear-2} and before, validated on {_tsyear-1}. "
+            f"Uses signal cutoffs ({btc_cutoff:.2f}/{eth_cutoff:.2f}) and current allocation weights."
         )
 
         first_year = max(2020, bt_end.year - 2)   # last 3 calendar years from end date
@@ -419,6 +455,8 @@ if st.session_state.get("pipeline_done"):
                 eth_cutoff       = eth_cutoff,
                 fee_rate         = fee_rate,
                 kill_pct         = kill_pct,
+                regime_overlay   = regime_overlay,
+                regime_ma_days   = regime_ma_days,
             )
             if len(ybt) == 0:
                 continue
@@ -542,8 +580,9 @@ if st.session_state.get("pipeline_done"):
     st.header("📊 Pipeline & Backtest Charts")
     st.caption(f"BTC Cutoff: {btc_cutoff:.0%} | ETH Cutoff: {eth_cutoff:.0%} | Kill Switch: -{kill_pct_val}% daily stop")
 
-    # ── Cumulative Return (most important — show first) ──────────────────
-    st.subheader("📈 Cumulative Return: Portfolio vs BTC vs ETH Buy & Hold")
+    # ── Cumulative Return — Per-Model comparison (BTC | ETH) ─────────────
+    st.subheader("📈 Cumulative Return: All Models vs Buy & Hold (BTC ● ETH)")
+    st.caption("Left panel: each BTC model vs BTC Buy&Hold. Right panel: each ETH model vs ETH Buy&Hold. 🏆 = best return model.")
     p7 = "plot7_cumulative_returns.png"
     if os.path.exists(p7):
         st.image(p7, use_container_width=True)
