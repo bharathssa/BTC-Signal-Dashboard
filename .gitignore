@@ -1,5 +1,4 @@
 # BTC Signal Pipeline Cache
-*.csv
 !requirements.txt
 
 # Python
