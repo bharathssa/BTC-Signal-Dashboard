@@ -485,7 +485,7 @@ if st.session_state.get("pipeline_done"):
     for p in ["plot2_model_evaluation.png",
               "plot3_confusion_matrices.png",
               "plot3_eth_confusion_matrices.png",
-              "plot4_backtest.png", "plot5_features.png"]:
+              "plot4_backtest_btc.png", "plot4_backtest_eth.png", "plot5_features.png"]:
         if os.path.exists(p):
             st.image(p, use_container_width=True)
         else:

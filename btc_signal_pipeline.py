@@ -903,6 +903,12 @@ def run_backtest(model, scaler, inp_type,
         bull_regime = (test_df["ma9_vs_ma21_bull"].rolling(regime_ma_days, min_periods=1).sum()
                        >= regime_ma_days * 0.75).astype(int).values
         signal = np.where(bull_regime == 1, 1, signal)
+        
+    # ── MA3 Trend Filter (User Request) ───────────────────────────────────────
+    # "add the buy logic if the signal is 1% higher than last 3 days MA"
+    if "ma3" in test_df.columns:
+        trend_filter = (test_df["close"] > 1.01 * test_df["ma3"]).astype(int)
+        signal = signal & trend_filter
 
     bt = test_df[["close", "forward_ret"]].copy()
     bt["signal"]      = signal
