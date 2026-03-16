@@ -104,8 +104,13 @@ CORE_FEATURES = [
     "rsi",              # RSI-14 overbought/oversold (asset-specific momentum oscillator)
     "ma20_vs_ma200_ratio",         # Short/Long term trend regime (MA20 / MA200)
     "volume_vs_5d_avg",        # Volume vs 5-day avg — confirms trend conviction
-    "gtrends_3d_vs_7d_sma", # Search momentum: 3d SMA / 7d SMA (lagged 1 day)
     "win_rate_10d",     # 10-day win rate: % of last 10 days that closed up
+    # --- Mandated by User ---
+    "fear_greed",       # Crypto Fear & Greed Index (SHARED sentiment signal)
+    "gtrends_3d_vs_7d_sma", # Search momentum: 3d SMA / 7d SMA (lagged 1 day)
+    "fed_rate_cut",     # US Federal Reserve interest rate daily changes
+    "bond_yield_cut",   # 10-Year Treasury Yield daily changes
+    "sp500_ret1",       # S&P 500 daily return (US Equity market correlation)
 ]
 
 # 4-State Portfolio Allocation Table (based on combined BTC + ETH signals)
